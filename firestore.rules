@@ -1,0 +1,80 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function myUserDoc() {
+      return signedIn() ? get(/databases/$(database)/documents/users/$(request.auth.uid)) : null;
+    }
+
+    function myRole() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? myUserDoc().data.role
+        : "user";
+    }
+
+    function isOwner() {
+      return myRole() == "owner";
+    }
+
+    function isAdmin() {
+      return myRole() == "admin";
+    }
+
+    function isMod() {
+      return myRole() == "mod";
+    }
+
+    function canManageFeatures() {
+      return isAdmin() || isOwner();
+    }
+
+    function canManageComments() {
+      return isMod() || isAdmin() || isOwner();
+    }
+
+    function canSetRole(nextRole) {
+      return isOwner()
+        ? nextRole in ["user", "mod", "admin"]
+        : isAdmin()
+          ? nextRole in ["user", "mod"]
+          : false;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && (
+        (
+          request.auth.uid == uid
+          && request.resource.data.role == resource.data.role
+        )
+        || (
+          (isAdmin() || isOwner())
+          && request.resource.data.role is string
+          && canSetRole(request.resource.data.role)
+        )
+      );
+      allow delete: if isOwner();
+    }
+
+    match /features/{featureId} {
+      allow read: if true;
+      allow create, update, delete: if canManageFeatures();
+    }
+
+    match /comments/{commentId} {
+      allow read: if true;
+      allow create: if signedIn();
+      allow update, delete: if canManageComments();
+    }
+
+    match /favorites/{favoriteId} {
+      allow read, create, delete: if signedIn();
+      allow update: if false;
+    }
+  }
+}
