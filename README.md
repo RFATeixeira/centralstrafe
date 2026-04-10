@@ -4,7 +4,7 @@ Projeto em Next.js para treino de CS2 com foco em:
 
 - Granadas
 - Movimentacoes
-- Calls
+- Taticas
 - Autenticacao (Google)
 - Dados em Firebase (Auth + Firestore)
 

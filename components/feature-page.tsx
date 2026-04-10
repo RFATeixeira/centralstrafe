@@ -16,7 +16,7 @@ import { db } from "@/lib/firebase";
 import { isCommentModerator, isFeatureManager } from "@/lib/roles";
 import { useAuthSession } from "@/components/auth-provider";
 
-export type FeatureCategory = "granadas" | "movimentacoes" | "calls";
+export type FeatureCategory = "granadas" | "movimentacoes" | "taticas";
 
 type FeatureItem = {
   id: string;
@@ -75,10 +75,10 @@ const categoryCopy: Record<FeatureCategory, CategoryCopy> = {
     singularTitle: "Movimentacao",
     plural: "movimentacoes",
   },
-  calls: {
-    singular: "call",
-    singularTitle: "Call",
-    plural: "calls",
+  taticas: {
+    singular: "tatica",
+    singularTitle: "Tatica",
+    plural: "taticas",
   },
 };
 
@@ -425,6 +425,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
   const [copiedCommandKey, setCopiedCommandKey] = useState("");
   const [coverProcessingImage, setCoverProcessingImage] = useState(false);
   const [hoveredFeatureId, setHoveredFeatureId] = useState<string | null>(null);
+  const [hoveredImageIndex, setHoveredImageIndex] = useState(0);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   const canAddFeature = isFeatureManager(role);
@@ -531,6 +532,54 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
       }),
     [features, filterGrenadeType, filterLocation, filterMap, filterPosition]
   );
+
+  const hoveredFeature = useMemo(
+    () => features.find((feature) => feature.id === hoveredFeatureId) ?? null,
+    [features, hoveredFeatureId]
+  );
+
+  const hoveredFeatureHasVideoPreview = useMemo(() => {
+    if (!hoveredFeature) {
+      return false;
+    }
+
+    return Boolean(getYouTubeHoverPreviewUrl(hoveredFeature.youtubeUrl));
+  }, [hoveredFeature]);
+
+  const hoveredFeatureImages = useMemo(() => {
+    if (!hoveredFeature) {
+      return [];
+    }
+
+    const imageList = hoveredFeature.imageTexts?.length
+      ? hoveredFeature.imageTexts
+      : [hoveredFeature.imageText ?? hoveredFeature.imageUrl ?? ""].filter(Boolean);
+    const coverImageText = hoveredFeature.coverImageText ?? imageList[0] ?? "";
+
+    return Array.from(
+      new Set(
+        [coverImageText, ...imageList]
+          .map((src) => src.trim())
+          .filter((src) => src.startsWith("data:") || src.startsWith("http"))
+      )
+    );
+  }, [hoveredFeature]);
+
+  useEffect(() => {
+    if (
+      !hoveredFeatureId ||
+      hoveredFeatureHasVideoPreview ||
+      hoveredFeatureImages.length <= 1
+    ) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setHoveredImageIndex((current) => (current + 1) % hoveredFeatureImages.length);
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [hoveredFeatureHasVideoPreview, hoveredFeatureId, hoveredFeatureImages.length]);
 
   const openExpandedFeature = (featureId: string) => {
     const nextExpandedFeatureId = expandedFeatureId === featureId ? null : featureId;
@@ -1096,6 +1145,14 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                 : 0;
               const activeMediaItem = mediaItems[safeMediaIndex] ?? null;
               const hasMultipleMedia = mediaItems.length > 1;
+              const showImageHoverSlideshow =
+                !isExpanded &&
+                hoveredFeatureId === feature.id &&
+                !videoHoverPreviewUrl &&
+                mediaImageSources.length > 1;
+              const compactCardImage = showImageHoverSlideshow
+                ? mediaImageSources[hoveredImageIndex % mediaImageSources.length]
+                : renderableImage;
 
             const goToPreviousImage = () => {
                 if (!mediaItems.length) {
@@ -1225,8 +1282,14 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                     <div className="flex w-full flex-col gap-3">
                       <div
                         className="-mx-4 aspect-video w-[calc(100%+2rem)] overflow-hidden border border-slate-700 bg-slate-950/60 md:-mx-5 md:w-[calc(100%+2.5rem)]"
-                        onMouseEnter={() => setHoveredFeatureId(feature.id)}
-                        onMouseLeave={() => setHoveredFeatureId((current) => (current === feature.id ? null : current))}
+                        onMouseEnter={() => {
+                          setHoveredFeatureId(feature.id);
+                          setHoveredImageIndex(0);
+                        }}
+                        onMouseLeave={() => {
+                          setHoveredFeatureId((current) => (current === feature.id ? null : current));
+                          setHoveredImageIndex(0);
+                        }}
                       >
                         {showVideoHoverPreview ? (
                           <iframe
@@ -1245,11 +1308,11 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                               }
                             }}
                           />
-                        ) : renderableImage ? (
+                        ) : compactCardImage ? (
                           <>
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={renderableImage}
+                              src={compactCardImage}
                               alt={feature.title}
                               className="h-full w-full object-cover"
                             />

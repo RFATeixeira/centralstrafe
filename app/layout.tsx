@@ -17,7 +17,7 @@ const rajdhani = Rajdhani({
 
 export const metadata: Metadata = {
   title: "CentralStrafe | Hub CS2",
-  description: "Guia de pixels, movimentacoes e calls para Counter-Strike 2.",
+  description: "Guia de pixels, movimentacoes e taticas para Counter-Strike 2.",
 };
 
 export default function RootLayout({

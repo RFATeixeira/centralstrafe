@@ -11,7 +11,7 @@ const navItems = [
   { href: "/", label: "Inicio", disabled: false },
   { href: "/granadas", label: "Granadas", disabled: false },
   { href: "/movimentacoes", label: "Movimentações", disabled: true },
-  { href: "/calls", label: "Calls", disabled: true },
+  { href: "/taticas", label: "Taticas", disabled: true },
 ];
 
 function RoleBadgeIcon({ role }: { role: string | null | undefined }) {

@@ -53,7 +53,7 @@ function Reveal({
 }
 
 type Showcase = {
-  id: "pixel" | "movement" | "calls";
+  id: "pixel" | "movement" | "taticas";
   badge: string;
   title: string;
   intro: string;
@@ -95,8 +95,8 @@ export default function Home() {
         "Cada conteudo vem com video e passo a passo visual para aplicacao pratica.",
     },
     {
-      id: "calls",
-      badge: "Calls",
+      id: "taticas",
+      badge: "Taticas",
       comingSoon: true,
       title: "Comunique melhor em todos os rounds",
       intro:
@@ -151,6 +151,7 @@ export default function Home() {
                   alt="CentralStrafe logo branco"
                   width={408}
                   height={48}
+                  className="h-auto w-auto"
                   priority
                 />
                 <p className="mt-2 flex flex-col items-center leading-none text-slate-100">
