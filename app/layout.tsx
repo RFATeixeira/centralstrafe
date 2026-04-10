@@ -18,13 +18,13 @@ const rajdhani = Rajdhani({
 export const metadata: Metadata = {
   title: {
     template: "CentralStrafe | %s",
-    default: "CentralStrafe | Inicio",
+    default: "CentralStrafe",
   },
   description: "Guia de pixels, movimentacoes e taticas para Counter-Strike 2.",
   icons: {
     icon: [
       {
-        url: "/logo-cs-black.png",
+        url: "/logo-cs-white.png",
         type: "image/png",
       },
       {
