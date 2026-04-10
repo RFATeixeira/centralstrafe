@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { isFirebaseConfigured } from "@/lib/firebase";
+import { useTheme } from "@/hooks/use-theme";
 
 function Reveal({
   children,
@@ -63,6 +64,7 @@ type Showcase = {
 };
 
 export default function Home() {
+  const theme = useTheme();
   const showcases: Showcase[] = [
     {
       id: "pixel",
@@ -146,14 +148,16 @@ export default function Home() {
               </div>
 
               <div className="flex min-h-80 flex-col items-center justify-center self-stretch">
-                <Image
-                  src="/logo-cs-white.png"
-                  alt="CentralStrafe logo branco"
-                  width={300}
-                  height={27}
-                  className="h-auto w-auto"
-                  priority
-                />
+                {theme && (
+                  <Image
+                    src={theme === "dark" ? "/logo-cs-white.png" : "/logo-cs-black.png"}
+                    alt={theme === "dark" ? "CentralStrafe logo branco" : "CentralStrafe logo preto"}
+                    width={300}
+                    height={27}
+                    className="h-auto w-auto"
+                    priority
+                  />
+                )}
                 <p className="mt-0 flex flex-col items-center leading-none text-slate-100">
                   <span className="text-3xl font-black uppercase tracking-[0.18em] md:text-5xl">
                     Central
