@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Exo_2, Rajdhani } from "next/font/google";
 import { AuthProvider } from "@/components/auth-provider";
 import { SiteHeader } from "@/components/site-header";
@@ -40,17 +40,19 @@ export const metadata: Metadata = {
     ],
     apple: [
       {
-        url: "/logo-cs-black.png",
+        url: "/logo-cs-mobile.png",
         type: "image/png",
-        media: "(prefers-color-scheme: light)",
-      },
-      {
-        url: "/logo-cs-white.png",
-        type: "image/png",
-        media: "(prefers-color-scheme: dark)",
+        sizes: "180x180",
       },
     ],
   },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({
