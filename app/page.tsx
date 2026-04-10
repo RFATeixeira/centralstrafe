@@ -149,12 +149,12 @@ export default function Home() {
                 <Image
                   src="/logo-cs-white.png"
                   alt="CentralStrafe logo branco"
-                  width={408}
-                  height={48}
+                  width={300}
+                  height={27}
                   className="h-auto w-auto"
                   priority
                 />
-                <p className="mt-2 flex flex-col items-center leading-none text-slate-100">
+                <p className="mt-0 flex flex-col items-center leading-none text-slate-100">
                   <span className="text-3xl font-black uppercase tracking-[0.18em] md:text-5xl">
                     Central
                   </span>

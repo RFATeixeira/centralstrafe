@@ -101,7 +101,7 @@ export function SiteHeader() {
               <Image
                 src="/logo-cs-white.png"
                 alt="CentralStrafe logo branco"
-                width={116}
+                width={60}
                 height={27}
                 className="h-auto w-auto"
                 priority
