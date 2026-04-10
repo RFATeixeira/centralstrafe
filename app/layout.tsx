@@ -16,8 +16,41 @@ const rajdhani = Rajdhani({
 });
 
 export const metadata: Metadata = {
-  title: "CentralStrafe | Hub CS2",
+  title: {
+    template: "CentralStrafe | %s",
+    default: "CentralStrafe | Inicio",
+  },
   description: "Guia de pixels, movimentacoes e taticas para Counter-Strike 2.",
+  icons: {
+    icon: [
+      {
+        url: "/logo-cs-black.png",
+        type: "image/png",
+      },
+      {
+        url: "/logo-cs-black.png",
+        type: "image/png",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/logo-cs-white.png",
+        type: "image/png",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+    apple: [
+      {
+        url: "/logo-cs-black.png",
+        type: "image/png",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/logo-cs-white.png",
+        type: "image/png",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+  },
 };
 
 export default function RootLayout({

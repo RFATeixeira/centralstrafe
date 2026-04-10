@@ -23,6 +23,9 @@ type FeatureItem = {
   category: FeatureCategory;
   title: string;
   grenadeType?: string;
+  objective?: string;
+  difficulty?: string;
+  throwType?: string;
   map?: string;
   location?: string;
   position?: string;
@@ -85,6 +88,9 @@ const categoryCopy: Record<FeatureCategory, CategoryCopy> = {
 type FeatureFormState = {
   title: string;
   grenadeType: string;
+  objective: string;
+  difficulty: string;
+  throwType: string;
   map: string;
   location: string;
   position: string;
@@ -98,6 +104,9 @@ type FeatureFormState = {
 const emptyFeatureForm = (): FeatureFormState => ({
   title: "",
   grenadeType: "Smoke",
+  objective: "Entry",
+  difficulty: "Facil",
+  throwType: "Parado",
   map: "",
   location: "",
   position: "Respawn",
@@ -286,6 +295,93 @@ const mapNameAliases: Record<string, string[]> = {
   cbble: ["cobblestone", "cbble"],
 };
 
+const grenadeTypeOptions = ["Smoke", "Flash", "Molotov", "He", "Decoy"];
+
+const mapOptions = [
+  { value: "Ancient", label: "Ancient" },
+  { value: "Anubis", label: "Anubis" },
+  { value: "Cobblestone", label: "Cobblestone" },
+  { value: "Dust II", label: "Dust II" },
+  { value: "Inferno", label: "Inferno" },
+  { value: "Mirage", label: "Mirage" },
+  { value: "Nuke", label: "Nuke" },
+  { value: "Overpass", label: "Overpass" },
+  { value: "Train", label: "Train" },
+  { value: "Vertigo", label: "Vertigo" },
+];
+
+const objectiveOptions = ["Entry", "Exec", "Retake", "Defesa", "Fake"];
+const difficultyOptions = ["Facil", "Medio", "Dificil"];
+const throwTypeOptions = [
+  "Jumpthrow",
+  "Parado",
+  "W + Jumpthrow",
+  "Walk + Jumpthrow",
+  "Run + Jumpthrow",
+];
+
+function normalizeToken(value: string | undefined) {
+  return slugifyIconName(value ?? "");
+}
+
+function normalizeMapKey(value: string | undefined) {
+  const slug = normalizeToken(value);
+  const compactSlug = slug.replace(/-/g, "");
+  const aliases = mapNameAliases[slug] ?? mapNameAliases[compactSlug] ?? [slug, compactSlug];
+  return aliases[0] ?? slug;
+}
+
+function isSameMap(first: string | undefined, second: string | undefined) {
+  if (!first?.trim() || !second?.trim()) {
+    return false;
+  }
+
+  return normalizeMapKey(first) === normalizeMapKey(second);
+}
+
+function canonicalGrenadeType(value: string | undefined) {
+  const key = normalizeToken(value);
+  const aliases = grenadeTypeAliases[key] ?? [key];
+
+  if (aliases.includes("smoke")) {
+    return "smoke";
+  }
+  if (aliases.includes("flash") || aliases.includes("flashbang")) {
+    return "flash";
+  }
+  if (aliases.includes("molotov") || aliases.includes("molly") || aliases.includes("incendiary")) {
+    return "molotov";
+  }
+  if (aliases.includes("he") || aliases.includes("hegrenade") || aliases.includes("frag")) {
+    return "he";
+  }
+  if (aliases.includes("decoy")) {
+    return "decoy";
+  }
+
+  return key;
+}
+
+function getDifficultyOptionClasses(option: string, active: boolean) {
+  const key = normalizeToken(option);
+
+  if (key === "facil") {
+    return active
+      ? "border-emerald-300 bg-emerald-300/18 text-emerald-100"
+      : "border-emerald-900/60 bg-emerald-950/30 text-emerald-200 hover:border-emerald-600";
+  }
+
+  if (key === "medio") {
+    return active
+      ? "border-amber-300 bg-amber-300/18 text-amber-100"
+      : "border-amber-900/60 bg-amber-950/30 text-amber-200 hover:border-amber-600";
+  }
+
+  return active
+    ? "border-rose-300 bg-rose-300/18 text-rose-100"
+    : "border-rose-900/60 bg-rose-950/30 text-rose-200 hover:border-rose-600";
+}
+
 function slugifyIconName(value: string) {
   return value
     .normalize("NFD")
@@ -410,6 +506,9 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
   const [featureForm, setFeatureForm] = useState<FeatureFormState>(emptyFeatureForm);
   const [filterGrenadeType, setFilterGrenadeType] = useState("");
   const [filterMap, setFilterMap] = useState("");
+  const [filterObjective, setFilterObjective] = useState("");
+  const [filterDifficulty, setFilterDifficulty] = useState("");
+  const [filterThrowType, setFilterThrowType] = useState("");
   const [filterLocation, setFilterLocation] = useState("");
   const [filterPosition, setFilterPosition] = useState("");
   const [expandedFeatureId, setExpandedFeatureId] = useState<string | null>(null);
@@ -430,6 +529,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
 
   const canAddFeature = isFeatureManager(role);
   const canModerateComments = isCommentModerator(role);
+  const isGranadasCategory = category === "granadas";
 
   useEffect(() => {
     if (!db) {
@@ -486,37 +586,79 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
     [comments, features]
   );
 
+  const availableImpactLocations = useMemo(() => {
+    if (!filterMap.trim()) {
+      return [] as string[];
+    }
+
+    return Array.from(
+      new Set(
+        features
+          .filter((item) => isSameMap(item.map, filterMap))
+          .map((item) => (item.location ?? "").trim())
+          .filter(Boolean)
+      )
+    ).sort((first, second) => first.localeCompare(second));
+  }, [features, filterMap]);
+
   const filterOptions = useMemo(
     () => ({
-      grenadeTypes: Array.from(
-        new Set(features.map((item) => (item.grenadeType ?? "").trim()).filter(Boolean))
-      ).sort((first, second) => first.localeCompare(second)),
-      maps: Array.from(
-        new Set(features.map((item) => (item.map ?? "").trim()).filter(Boolean))
-      ).sort((first, second) => first.localeCompare(second)),
-      locations: Array.from(
-        new Set(features.map((item) => (item.location ?? "").trim()).filter(Boolean))
-      ).sort((first, second) => first.localeCompare(second)),
+      grenadeTypes: grenadeTypeOptions,
+      maps: mapOptions,
+      objectives: objectiveOptions,
+      difficulties: difficultyOptions,
+      throwTypes: throwTypeOptions,
+      locations: availableImpactLocations,
       positions: Array.from(
         new Set(features.map((item) => normalizePosition(item.position)).filter(Boolean))
       ).sort((first, second) => first.localeCompare(second)),
     }),
-    [features]
+    [availableImpactLocations, features]
   );
+
+  useEffect(() => {
+    if (!filterLocation) {
+      return;
+    }
+
+    if (!availableImpactLocations.includes(filterLocation)) {
+      setFilterLocation("");
+    }
+  }, [availableImpactLocations, filterLocation]);
 
   const filteredFeatures = useMemo(
     () =>
       features.filter((feature) => {
-        const featureGrenadeType = (feature.grenadeType ?? "").trim();
-        const featureMap = (feature.map ?? "").trim();
+        const featureGrenadeType = canonicalGrenadeType(feature.grenadeType);
+        const selectedGrenadeType = canonicalGrenadeType(filterGrenadeType);
+        const featureMap = normalizeMapKey(feature.map);
+        const selectedMap = normalizeMapKey(filterMap);
+        const featureObjective = normalizeToken(feature.objective);
+        const selectedObjective = normalizeToken(filterObjective);
+        const featureDifficulty = normalizeToken(feature.difficulty);
+        const selectedDifficulty = normalizeToken(filterDifficulty);
+        const featureThrowType = normalizeToken(feature.throwType);
+        const selectedThrowType = normalizeToken(filterThrowType);
         const featureLocation = (feature.location ?? "").trim();
         const featurePosition = normalizePosition(feature.position);
 
-        if (filterGrenadeType && featureGrenadeType !== filterGrenadeType) {
+        if (filterGrenadeType && featureGrenadeType !== selectedGrenadeType) {
           return false;
         }
 
-        if (filterMap && featureMap !== filterMap) {
+        if (filterMap && featureMap !== selectedMap) {
+          return false;
+        }
+
+        if (filterObjective && featureObjective !== selectedObjective) {
+          return false;
+        }
+
+        if (filterDifficulty && featureDifficulty !== selectedDifficulty) {
+          return false;
+        }
+
+        if (filterThrowType && featureThrowType !== selectedThrowType) {
           return false;
         }
 
@@ -530,7 +672,16 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
 
         return true;
       }),
-    [features, filterGrenadeType, filterLocation, filterMap, filterPosition]
+    [
+      features,
+      filterDifficulty,
+      filterGrenadeType,
+      filterLocation,
+      filterMap,
+      filterObjective,
+      filterPosition,
+      filterThrowType,
+    ]
   );
 
   const hoveredFeature = useMemo(
@@ -668,6 +819,9 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
     setFeatureForm({
       title: feature.title ?? "",
       grenadeType: feature.grenadeType ?? "Smoke",
+      objective: feature.objective ?? "Entry",
+      difficulty: feature.difficulty ?? "Facil",
+      throwType: feature.throwType ?? "Parado",
       map: feature.map ?? "",
       location: feature.location ?? "",
       position: normalizePosition(feature.position) || "Respawn",
@@ -715,6 +869,9 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
         category,
         title: featureForm.title.trim(),
         grenadeType: featureForm.grenadeType.trim(),
+        objective: featureForm.objective.trim(),
+        difficulty: featureForm.difficulty.trim(),
+        throwType: featureForm.throwType.trim(),
         map: featureForm.map.trim(),
         location: featureForm.location.trim(),
         position: featureForm.position.trim(),
@@ -935,160 +1092,262 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
         )}
       </div>
 
-      <section className="mt-4 space-y-4">
-        <div className="rounded-2xl border border-slate-700 bg-slate-900/75 p-4 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-5">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold uppercase tracking-[0.08em] text-slate-200">
-              Filtros
-            </p>
+      <section className="mt-4">
+        <div className="grid items-start gap-4 lg:grid-cols-[280px_1fr]">
+          <aside className="rounded-2xl border border-slate-700 bg-slate-900/75 p-4 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-5 lg:sticky lg:top-24">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold uppercase tracking-[0.08em] text-slate-200">
+                Filtros
+              </p>
+              <button
+                type="button"
+                onClick={() => setMobileFiltersOpen((current) => !current)}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-500 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-slate-300 lg:hidden"
+                aria-expanded={mobileFiltersOpen}
+                aria-controls="feature-filters-mobile"
+              >
+                {mobileFiltersOpen ? "Fechar" : "Abrir"}
+              </button>
+            </div>
 
-            <button
-              type="button"
-              onClick={() => setMobileFiltersOpen((current) => !current)}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-500 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-slate-300 md:hidden"
-              aria-expanded={mobileFiltersOpen}
-              aria-controls="feature-filters-mobile"
+            <div
+              id="feature-filters-mobile"
+              className={`${mobileFiltersOpen ? "mt-3 grid" : "hidden"} grid-cols-1 gap-3 lg:mt-3 lg:grid`}
             >
-              {mobileFiltersOpen ? "Fechar" : "Abrir"}
-            </button>
-          </div>
-
-          <div className="mt-3 hidden gap-3 md:grid md:grid-cols-4">
-            <label className="space-y-2 text-sm text-slate-300">
-              <span>Tipo</span>
-              <select
-                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 outline-none"
-                value={filterGrenadeType}
-                onChange={(event) => setFilterGrenadeType(event.target.value)}
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterGrenadeType("");
+                  setFilterMap("");
+                  setFilterObjective("");
+                  setFilterDifficulty("");
+                  setFilterThrowType("");
+                  setFilterLocation("");
+                  setFilterPosition("");
+                }}
+                className="w-full rounded-lg border border-orange-300/40 bg-orange-400/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-orange-200 transition hover:bg-orange-400/20"
               >
-                <option value="">Todos</option>
-                {filterOptions.grenadeTypes.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
+                Limpar filtros
+              </button>
 
-            <label className="space-y-2 text-sm text-slate-300">
-              <span>Mapa</span>
-              <select
-                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 outline-none"
-                value={filterMap}
-                onChange={(event) => setFilterMap(event.target.value)}
-              >
-                <option value="">Todos</option>
-                {filterOptions.maps.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
+              {isGranadasCategory && (
+                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
+                    <span>Mapa</span>
+                    <svg
+                      viewBox="0 0 20 20"
+                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </summary>
+                  <div className="mt-3 grid grid-cols-1 gap-2">
+                    {filterOptions.maps.map((option) => {
+                      const active = isSameMap(filterMap, option.value);
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setFilterMap(active ? "" : option.value)}
+                          className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                            active
+                              ? "border-orange-300 bg-orange-300/15 text-orange-100"
+                              : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                          }`}
+                        >
+                          <IconWithFallback
+                            candidates={getMapIconCandidates(option.value)}
+                            alt={`Mapa ${option.label}`}
+                            className="h-5 w-5 shrink-0 object-contain"
+                          />
+                          <span>{option.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
 
-            <label className="space-y-2 text-sm text-slate-300">
-              <span>Local</span>
-              <select
-                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 outline-none"
-                value={filterLocation}
-                onChange={(event) => setFilterLocation(event.target.value)}
-              >
-                <option value="">Todos</option>
-                {filterOptions.locations.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
+              {isGranadasCategory && (
+                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
+                    <span>Tipo de granada</span>
+                    <svg
+                      viewBox="0 0 20 20"
+                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </summary>
+                  <div className="mt-3 grid grid-cols-1 gap-2">
+                    {filterOptions.grenadeTypes.map((option) => {
+                      const active = canonicalGrenadeType(filterGrenadeType) === canonicalGrenadeType(option);
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => setFilterGrenadeType(active ? "" : option)}
+                          className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                            active
+                              ? "border-cyan-300 bg-cyan-300/12 text-cyan-100"
+                              : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                          }`}
+                        >
+                          <IconWithFallback
+                            candidates={getGrenadeTypeIconCandidates(option)}
+                            alt={`Tipo ${option}`}
+                            className="h-5 w-5 shrink-0 object-contain"
+                          />
+                          <span>{option}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
 
-            <label className="space-y-2 text-sm text-slate-300">
-              <span>Posicao</span>
-              <select
-                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 outline-none"
-                value={filterPosition}
-                onChange={(event) => setFilterPosition(event.target.value)}
-              >
-                <option value="">Todos</option>
-                {filterOptions.positions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+              {isGranadasCategory && (
+                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
+                    <span>Objetivo</span>
+                    <svg
+                      viewBox="0 0 20 20"
+                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </summary>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {filterOptions.objectives.map((option) => {
+                      const active = normalizeToken(filterObjective) === normalizeToken(option);
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => setFilterObjective(active ? "" : option)}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                            active
+                              ? "border-emerald-300 bg-emerald-300/15 text-emerald-100"
+                              : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                          }`}
+                        >
+                          {option}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
 
-          <div
-            id="feature-filters-mobile"
-            className={`${mobileFiltersOpen ? "mt-3 grid" : "hidden"} grid-cols-1 gap-3 md:hidden`}
-          >
-              <label className="space-y-2 text-sm text-slate-300">
-                <span>Tipo</span>
-                <select
-                  className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 outline-none"
-                  value={filterGrenadeType}
-                  onChange={(event) => setFilterGrenadeType(event.target.value)}
-                >
-                  <option value="">Todos</option>
-                  {filterOptions.grenadeTypes.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {isGranadasCategory && (
+                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
+                    <span>Dificuldade</span>
+                    <svg
+                      viewBox="0 0 20 20"
+                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </summary>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {filterOptions.difficulties.map((option) => {
+                      const active = normalizeToken(filterDifficulty) === normalizeToken(option);
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => setFilterDifficulty(active ? "" : option)}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${getDifficultyOptionClasses(option, active)}`}
+                        >
+                          {option}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
 
-            <label className="space-y-2 text-sm text-slate-300">
-              <span>Mapa</span>
-              <select
-                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 outline-none"
-                value={filterMap}
-                onChange={(event) => setFilterMap(event.target.value)}
-              >
-                <option value="">Todos</option>
-                {filterOptions.maps.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
+              {isGranadasCategory && (
+                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
+                    <span>Tipo de lancamento</span>
+                    <svg
+                      viewBox="0 0 20 20"
+                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </summary>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {filterOptions.throwTypes.map((option) => {
+                      const active = normalizeToken(filterThrowType) === normalizeToken(option);
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => setFilterThrowType(active ? "" : option)}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                            active
+                              ? "border-violet-300 bg-violet-300/15 text-violet-100"
+                              : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                          }`}
+                        >
+                          {option}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
 
-            <label className="space-y-2 text-sm text-slate-300">
-              <span>Local</span>
-              <select
-                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 outline-none"
-                value={filterLocation}
-                onChange={(event) => setFilterLocation(event.target.value)}
-              >
-                <option value="">Todos</option>
-                {filterOptions.locations.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
+                <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
+                  <span>Local do impacto</span>
+                  <svg
+                    viewBox="0 0 20 20"
+                    className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </summary>
+                <div className="mt-3 space-y-2 text-xs text-slate-400">
+                  <p>
+                    {filterMap
+                      ? "Lista carregada com base no mapa selecionado."
+                      : "Selecione um mapa primeiro para habilitar os locais."}
+                  </p>
+                  <select
+                    className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    value={filterLocation}
+                    onChange={(event) => setFilterLocation(event.target.value)}
+                    disabled={!filterMap}
+                  >
+                    <option value="">Todos</option>
+                    {filterOptions.locations.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </details>
+            </div>
+          </aside>
 
-            <label className="space-y-2 text-sm text-slate-300">
-              <span>Posicao</span>
-              <select
-                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 outline-none"
-                value={filterPosition}
-                onChange={(event) => setFilterPosition(event.target.value)}
-              >
-                <option value="">Todos</option>
-                {filterOptions.positions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </div>
-
+          <div>
         {filteredFeatures.length === 0 ? (
           <div className="rounded-2xl border border-slate-700 bg-slate-900/75 p-6 text-slate-300">
             {`Nenhuma ${copy.singular} encontrada com esses filtros. `}
@@ -1345,6 +1604,21 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                       {feature.grenadeType && (
                         <span className="rounded-full border border-slate-700 px-2.5 py-1">
                           Tipo: {feature.grenadeType}
+                        </span>
+                      )}
+                      {feature.objective && (
+                        <span className="rounded-full border border-slate-700 px-2.5 py-1">
+                          Objetivo: {feature.objective}
+                        </span>
+                      )}
+                      {feature.difficulty && (
+                        <span className="rounded-full border border-slate-700 px-2.5 py-1">
+                          Dificuldade: {feature.difficulty}
+                        </span>
+                      )}
+                      {feature.throwType && (
+                        <span className="rounded-full border border-slate-700 px-2.5 py-1">
+                          Lancamento: {feature.throwType}
                         </span>
                       )}
                       {feature.map && (
@@ -1636,6 +1910,8 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
           })}
           </div>
         )}
+          </div>
+        </div>
       </section>
 
       {featureModalOpen && canAddFeature && (
@@ -1678,34 +1954,45 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                   />
                 </label>
 
-                <label className="space-y-2 text-sm text-slate-300">
-                  <span>Tipo de granada</span>
-                  <select
-                    className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
-                    value={featureForm.grenadeType}
-                    onChange={(event) =>
-                      setFeatureForm((current) => ({ ...current, grenadeType: event.target.value }))
-                    }
-                  >
-                    <option value="Smoke">Smoke</option>
-                    <option value="Flash">Flash</option>
-                    <option value="He">He</option>
-                    <option value="Molotov">Molotov</option>
-                    <option value="Decoy">Decoy</option>
-                  </select>
-                </label>
+                {isGranadasCategory ? (
+                  <label className="space-y-2 text-sm text-slate-300">
+                    <span>Tipo de granada</span>
+                    <select
+                      className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
+                      value={featureForm.grenadeType}
+                      onChange={(event) =>
+                        setFeatureForm((current) => ({ ...current, grenadeType: event.target.value }))
+                      }
+                    >
+                      {grenadeTypeOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <div />
+                )}
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2 text-sm text-slate-300">
                   <span>Mapa</span>
-                  <input
+                  <select
                     className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
                     value={featureForm.map}
                     onChange={(event) =>
                       setFeatureForm((current) => ({ ...current, map: event.target.value }))
                     }
-                  />
+                  >
+                    <option value="">Selecione</option>
+                    {mapOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
 
                 <label className="space-y-2 text-sm text-slate-300">
@@ -1720,6 +2007,61 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                   />
                 </label>
               </div>
+
+              {isGranadasCategory && (
+                <div className="grid gap-4 md:grid-cols-3">
+                  <label className="space-y-2 text-sm text-slate-300">
+                    <span>Objetivo</span>
+                    <select
+                      className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
+                      value={featureForm.objective}
+                      onChange={(event) =>
+                        setFeatureForm((current) => ({ ...current, objective: event.target.value }))
+                      }
+                    >
+                      {objectiveOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="space-y-2 text-sm text-slate-300">
+                    <span>Dificuldade</span>
+                    <select
+                      className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
+                      value={featureForm.difficulty}
+                      onChange={(event) =>
+                        setFeatureForm((current) => ({ ...current, difficulty: event.target.value }))
+                      }
+                    >
+                      {difficultyOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="space-y-2 text-sm text-slate-300">
+                    <span>Tipo de lancamento</span>
+                    <select
+                      className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
+                      value={featureForm.throwType}
+                      onChange={(event) =>
+                        setFeatureForm((current) => ({ ...current, throwType: event.target.value }))
+                      }
+                    >
+                      {throwTypeOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
 
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2 text-sm text-slate-300">

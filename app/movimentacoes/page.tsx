@@ -1,4 +1,9 @@
+import type { Metadata } from "next";
 import { FeaturePage } from "@/components/feature-page";
+
+export const metadata: Metadata = {
+  title: "Movimentacoes",
+};
 
 export default function MovimentacoesPage() {
   return (
