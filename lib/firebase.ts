@@ -60,7 +60,6 @@ if (isFirebaseConfigured) {
 
 export const auth = app ? getAuth(app) : null;
 export const db = app ? getFirestore(app) : null;
-
 export const analyticsPromise: Promise<Analytics | null> =
   app && typeof window !== "undefined"
     ? isSupported()

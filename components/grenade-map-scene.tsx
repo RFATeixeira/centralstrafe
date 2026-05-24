@@ -40,6 +40,8 @@ type GrenadeMapSceneProps = {
   onImpactClick?: (entry: GrenadeMapEntry) => void;
   onBackgroundClick?: () => void;
   className?: string;
+  externalPreviewEntry?: GrenadeMapEntry | null;
+  externalPreviewPoint?: MapPoint | null;
 };
 
 function buildPointKey(point?: MapPoint | null) {
@@ -66,7 +68,7 @@ function pointLabel(point?: MapPoint | null) {
     return "";
   }
 
-  return `${point.x.toFixed(1)}%, ${point.y.toFixed(1)}%`;
+  return `${point.x.toFixed(1)}, ${point.y.toFixed(1)}`;
 }
 
 function getYouTubeHoverPreviewUrl(url: string) {
@@ -133,6 +135,8 @@ export function GrenadeMapScene({
   onLaunchClick,
   onImpactClick,
   onBackgroundClick,
+  externalPreviewEntry,
+  externalPreviewPoint,
   className,
 }: GrenadeMapSceneProps) {
   const hasDraftLine = Boolean(selectedLaunchPoint && selectedImpactPoint);
@@ -177,6 +181,32 @@ export function GrenadeMapScene({
 
     return getYouTubeHoverPreviewUrl(hoveredLaunchEntry.youtubeUrl);
   }, [hoveredLaunchEntry]);
+
+  const externalPreviewImages = useMemo(() => {
+    if (!externalPreviewEntry) {
+      return [] as string[];
+    }
+
+    const imageList = externalPreviewEntry.imageTexts?.length
+      ? externalPreviewEntry.imageTexts
+      : [externalPreviewEntry.coverImageText ?? externalPreviewEntry.imageText ?? externalPreviewEntry.imageUrl ?? ""].filter(Boolean);
+
+    return Array.from(
+      new Set(
+        imageList
+          .map((src) => src.trim())
+          .filter((src) => src.startsWith("data:") || src.startsWith("http"))
+      )
+    );
+  }, [externalPreviewEntry]);
+
+  const externalPreviewVideoUrl = useMemo(() => {
+    if (!externalPreviewEntry?.youtubeUrl) {
+      return "";
+    }
+
+    return getYouTubeHoverPreviewUrl(externalPreviewEntry.youtubeUrl);
+  }, [externalPreviewEntry]);
   const selectedLaunchImpactKeys = new Set(
     activeFocus?.kind === "launch"
       ? entries
@@ -457,6 +487,46 @@ export function GrenadeMapScene({
                     {hoveredPreviewImageIndex % hoveredLaunchImages.length + 1}/{hoveredLaunchImages.length}
                   </div>
                 )}
+              </>
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-sm text-slate-400">
+                Sem preview disponivel
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {externalPreviewEntry && externalPreviewPoint && (
+        <div
+          className="pointer-events-none absolute z-50 w-[min(72vw,18rem)] -translate-x-1/2 -translate-y-[118%] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-[0_24px_60px_rgba(0,0,0,.45)]"
+          style={{
+            left: `${externalPreviewPoint.x}%`,
+            top: `${externalPreviewPoint.y}%`,
+          }}
+        >
+          <div className="border-b border-slate-700 bg-slate-900/80 px-3 py-2">
+            <p className="text-xs uppercase tracking-[0.14em] text-orange-300">Preview da granada</p>
+            <p className="mt-1 text-sm font-semibold text-white">{externalPreviewEntry.title}</p>
+          </div>
+
+          <div className="relative aspect-video bg-slate-950">
+            {externalPreviewVideoUrl ? (
+              <iframe
+                className="h-full w-full"
+                src={externalPreviewVideoUrl}
+                title={`${externalPreviewEntry.title} preview`}
+                allow="autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+              />
+            ) : externalPreviewImages.length > 0 ? (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={externalPreviewImages[0]}
+                  alt={externalPreviewEntry.title}
+                  className="h-full w-full object-cover"
+                />
               </>
             ) : (
               <div className="flex h-full w-full items-center justify-center text-sm text-slate-400">

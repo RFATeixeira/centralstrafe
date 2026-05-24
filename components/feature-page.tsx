@@ -11,7 +11,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { FormEvent, WheelEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/firebase";
 import { isCommentModerator, isFeatureManager } from "@/lib/roles";
 import { useAuthSession } from "@/components/auth-provider";
@@ -36,6 +36,7 @@ type FeatureItem = {
   description: string;
   coverImageText?: string;
   imageTexts?: string[];
+  imageZoomEnabled?: boolean[];
   imageText?: string;
   imageUrl?: string;
   youtubeUrl: string;
@@ -108,6 +109,7 @@ type FeatureFormState = {
   description: string;
   coverImageText: string;
   imageTexts: string[];
+  imageZoomEnabled: boolean[];
   youtubeUrl: string;
 };
 
@@ -126,12 +128,65 @@ const emptyFeatureForm = (): FeatureFormState => ({
   description: "",
   coverImageText: "",
   imageTexts: [],
+  imageZoomEnabled: [],
   youtubeUrl: "",
 });
 
 function normalizePosition(value: string | undefined) {
   const trimmed = (value ?? "").trim();
   return trimmed === "Spawn" ? "Respawn" : trimmed;
+}
+
+async function readFileAsDataUrl(file: File) {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("Falha ao ler imagem."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function compressImageToDataUrl(file: File) {
+  const sourceDataUrl = await readFileAsDataUrl(file);
+  const image = new Image();
+
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("Falha ao processar imagem."));
+    image.src = sourceDataUrl;
+  });
+
+  const maxDimension = 1080;
+  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return sourceDataUrl;
+  }
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, 0, 0, width, height);
+
+  let quality = 0.92;
+  let output = canvas.toDataURL("image/webp", quality);
+
+  while (output.length > 1_100_000 && quality > 0.55) {
+    quality -= 0.08;
+    output = canvas.toDataURL("image/webp", quality);
+  }
+
+  return output;
+}
+
+function pickFirstNonEmptyText(...values: Array<string | null | undefined>) {
+  return values.find((value) => Boolean(value?.trim()))?.trim() ?? "";
 }
 
 function getYouTubeEmbedUrl(url: string) {
@@ -206,6 +261,67 @@ function getYouTubeHoverPreviewUrl(url: string) {
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 }
 
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+const ZOOM_STEP = 0.1;
+
+type ZoomSliderProps = {
+  value: number;
+  onChange: (value: number) => void;
+  label: string;
+  hint: string;
+  className?: string;
+};
+
+function ZoomSlider({ value, onChange, label, hint, className }: ZoomSliderProps) {
+  return (
+    <div
+      className={`flex items-center gap-3 rounded-2xl border border-slate-700 bg-slate-950/90 px-3 py-2.5 shadow-[0_18px_45px_rgba(0,0,0,.38)] ${className ?? ""}`.trim()}
+    >
+      <div className="space-y-0.5">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</p>
+        <p className="text-[10px] leading-tight text-slate-500">{hint}</p>
+      </div>
+      <input
+        type="range"
+        min={ZOOM_MIN}
+        max={ZOOM_MAX}
+        step={ZOOM_STEP}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="h-2 w-full min-w-40 cursor-pointer accent-orange-300"
+        aria-label={label}
+      />
+      <div className="min-w-12 rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-center text-[11px] font-semibold text-slate-200">
+        {value.toFixed(1)}x
+      </div>
+    </div>
+  );
+}
+
+type ZoomLensProps = {
+  src: string;
+  alt: string;
+  zoom: number;
+  className?: string;
+};
+
+function ZoomLens({ src, alt, zoom, className }: ZoomLensProps) {
+  return (
+    <div
+      className={`pointer-events-none absolute left-[10%] top-1/2 z-20 -translate-y-1/2 overflow-hidden rounded-full border border-slate-900/90 bg-black shadow-[0_18px_45px_rgba(0,0,0,.55)] ${className ?? "h-44 w-44 md:h-56 md:w-56"}`.trim()}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={alt}
+        className="h-full w-full object-cover"
+        style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+      />
+    </div>
+  );
+}
+
 function sendYouTubePlaybackCommands(targetWindow: Window | null, speed = 1.5) {
   if (!targetWindow) {
     return;
@@ -235,18 +351,18 @@ function getCommentTimeLabel(value: unknown) {
   return new Date(seconds * 1000).toLocaleDateString("pt-BR");
 }
 
-function getFeatureTitleSizeClass(title: string) {
+function getFeatureTitleSizeClass(title: string, compact = false) {
   const length = title.trim().length;
 
   if (length >= 70) {
-    return "text-sm md:text-base";
+    return compact ? "text-[10px] md:text-xs" : "text-sm md:text-base";
   }
 
   if (length >= 48) {
-    return "text-base md:text-lg";
+    return compact ? "text-xs md:text-sm" : "text-base md:text-lg";
   }
 
-  return "text-xl md:text-2xl";
+  return compact ? "text-sm md:text-base" : "text-xl md:text-2xl";
 }
 
 const grenadeIconByKey: Record<string, string> = {
@@ -342,7 +458,9 @@ const objectiveOptions = ["Entry", "Exec", "Retake", "Defesa", "Fake"];
 const difficultyOptions = ["Facil", "Medio", "Dificil"];
 const throwTypeOptions = [
   "Jumpthrow",
+  "A + Jumpthrow",
   "Parado",
+  "D + Jumpthrow",
   "W + Jumpthrow",
   "Walk + Jumpthrow",
   "Run + Jumpthrow",
@@ -498,7 +616,7 @@ function formatMapPoint(point?: MapPoint | null) {
     return "";
   }
 
-  return `${point.x.toFixed(1)}%, ${point.y.toFixed(1)}%`;
+  return `${point.x.toFixed(1)}, ${point.y.toFixed(1)}`;
 }
 
 function getPointKey(point?: MapPoint | null) {
@@ -582,52 +700,6 @@ function IconWithFallback({ candidates, alt, className }: IconWithFallbackProps)
   );
 }
 
-async function readFileAsDataUrl(file: File) {
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
-    reader.onerror = () => reject(new Error("Falha ao ler imagem."));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function compressImageToDataUrl(file: File) {
-  const sourceDataUrl = await readFileAsDataUrl(file);
-  const image = new Image();
-
-  await new Promise<void>((resolve, reject) => {
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error("Falha ao processar imagem."));
-    image.src = sourceDataUrl;
-  });
-
-  const maxDimension = 1280;
-  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
-  const width = Math.max(1, Math.round(image.width * scale));
-  const height = Math.max(1, Math.round(image.height * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return sourceDataUrl;
-  }
-
-  context.drawImage(image, 0, 0, width, height);
-
-  let quality = 0.82;
-  let output = canvas.toDataURL("image/jpeg", quality);
-
-  while (output.length > 700_000 && quality > 0.4) {
-    quality -= 0.08;
-    output = canvas.toDataURL("image/jpeg", quality);
-  }
-
-  return output;
-}
-
 export function FeaturePage({ category, badge, title, intro, points, showHero = true }: FeaturePageProps) {
   const { user, profile, role } = useAuthSession();
   const copy = categoryCopy[category];
@@ -651,12 +723,13 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
   const [feedback, setFeedback] = useState("");
   const [saving, setSaving] = useState(false);
   const [processingImage, setProcessingImage] = useState(false);
-  const [imageViewer, setImageViewer] = useState<{ src: string; alt: string } | null>(null);
-  const [imageZoom, setImageZoom] = useState(1);
+  const [imageViewer, setImageViewer] = useState<{ src: string; alt: string; zoomEnabled: boolean } | null>(null);
+  const [imageViewerZoom, setImageViewerZoom] = useState(2);
   const [copiedCommandKey, setCopiedCommandKey] = useState("");
-  const [coverProcessingImage, setCoverProcessingImage] = useState(false);
   const [hoveredFeatureId, setHoveredFeatureId] = useState<string | null>(null);
   const [hoveredImageIndex, setHoveredImageIndex] = useState(0);
+  const [selectedMapHoveredFeatureId, setSelectedMapHoveredFeatureId] = useState<string | null>(null);
+  const [selectedMapHoveredImageIndex, setSelectedMapHoveredImageIndex] = useState(0);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [selectedMapFocus, setSelectedMapFocus] = useState<GrenadeMapFocus | null>(null);
   const [mapSelectionMode, setMapSelectionMode] = useState<"launch" | "impact">("launch");
@@ -843,7 +916,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
     const imageList = hoveredFeature.imageTexts?.length
       ? hoveredFeature.imageTexts
       : [hoveredFeature.imageText ?? hoveredFeature.imageUrl ?? ""].filter(Boolean);
-    const coverImageText = hoveredFeature.coverImageText ?? imageList[0] ?? "";
+    const coverImageText = pickFirstNonEmptyText(hoveredFeature.coverImageText, imageList[0]);
 
     return Array.from(
       new Set(
@@ -908,32 +981,6 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
     [currentMapFeatures]
   );
 
-  const selectedMapOverviewSource = useMemo(
-    () => getMapOverviewSource(filterMap),
-    [filterMap]
-  );
-
-  const selectedMapFocusedFeatures = useMemo(() => {
-    if (!selectedMapFocus) {
-      return [] as FeatureItem[];
-    }
-
-    return selectedMapFeatures.filter((feature) => {
-      const pointKey =
-        selectedMapFocus.kind === "launch"
-          ? getPointKey(feature.launchPoint)
-          : getPointKey(feature.impactPoint);
-
-      return pointKey === selectedMapFocus.pointKey;
-    });
-  }, [selectedMapFeatures, selectedMapFocus]);
-
-  const openExpandedFeature = (featureId: string) => {
-    const nextExpandedFeatureId = expandedFeatureId === featureId ? null : featureId;
-    setExpandedFeatureId(nextExpandedFeatureId);
-    setActiveExpandedImageIndex(0);
-  };
-
   const handleImageUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) {
       return;
@@ -955,10 +1002,12 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
       const filesToProcess = incomingFiles.slice(0, remainingSlots);
       const compressedList = await Promise.all(filesToProcess.map((file) => compressImageToDataUrl(file)));
       const validImages = compressedList.filter((imageData) => imageData.length <= 950_000);
+      const nextZoomFlags = validImages.map(() => false);
 
       setFeatureForm((current) => ({
         ...current,
         imageTexts: [...current.imageTexts, ...validImages].slice(0, 5),
+        imageZoomEnabled: [...current.imageZoomEnabled, ...nextZoomFlags].slice(0, 5),
       }));
 
       if (validImages.length === 0) {
@@ -975,32 +1024,118 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
     }
   };
 
-  const handleCoverImageUpload = async (file: File | null) => {
-    if (!file) {
-      setFeatureForm((current) => ({ ...current, coverImageText: "" }));
+  const selectedMapOverviewSource = useMemo(
+    () => getMapOverviewSource(filterMap),
+    [filterMap]
+  );
+
+  const selectedMapFocusedFeatures = useMemo(() => {
+    if (!selectedMapFocus) {
+      return [] as FeatureItem[];
+    }
+
+    return selectedMapFeatures.filter((feature) => {
+      const pointKey =
+        selectedMapFocus.kind === "launch"
+          ? getPointKey(feature.launchPoint)
+          : getPointKey(feature.impactPoint);
+
+      return pointKey === selectedMapFocus.pointKey;
+    });
+  }, [selectedMapFeatures, selectedMapFocus]);
+
+  const selectedMapHoveredFeature = useMemo(
+    () =>
+      selectedMapFocusedFeatures.find((feature) => feature.id === selectedMapHoveredFeatureId) ?? null,
+    [selectedMapFocusedFeatures, selectedMapHoveredFeatureId]
+  );
+
+  
+
+  const selectedMapHoveredFeatureHasVideoPreview = useMemo(() => {
+    if (!selectedMapHoveredFeature) {
+      return false;
+    }
+
+    return Boolean(getYouTubeHoverPreviewUrl(selectedMapHoveredFeature.youtubeUrl));
+  }, [selectedMapHoveredFeature]);
+
+  const selectedMapHoveredFeatureVideoUrl = useMemo(() => {
+    if (!selectedMapHoveredFeature) {
+      return "";
+    }
+
+    return getYouTubeHoverPreviewUrl(selectedMapHoveredFeature.youtubeUrl);
+  }, [selectedMapHoveredFeature]);
+
+  const selectedMapHoveredFeatureImages = useMemo(() => {
+    if (!selectedMapHoveredFeature) {
+      return [] as string[];
+    }
+
+    const imageList = selectedMapHoveredFeature.imageTexts?.length
+      ? selectedMapHoveredFeature.imageTexts
+      : [selectedMapHoveredFeature.coverImageText ?? selectedMapHoveredFeature.imageText ?? selectedMapHoveredFeature.imageUrl ?? ""].filter(Boolean);
+    const coverImageText = pickFirstNonEmptyText(
+      selectedMapHoveredFeature.coverImageText,
+      imageList[0]
+    );
+
+    return Array.from(
+      new Set(
+        [coverImageText, ...imageList]
+          .map((src) => src.trim())
+          .filter((src) => src.startsWith("data:") || src.startsWith("http"))
+      )
+    );
+  }, [selectedMapHoveredFeature]);
+
+  useEffect(() => {
+    if (
+      !selectedMapHoveredFeatureId ||
+      selectedMapHoveredFeatureHasVideoPreview ||
+      selectedMapHoveredFeatureImages.length <= 1
+    ) {
       return;
     }
 
-    setCoverProcessingImage(true);
-    setFeedback("Processando imagem de capa...");
+    const intervalId = window.setInterval(() => {
+      setSelectedMapHoveredImageIndex((current) => (current + 1) % selectedMapHoveredFeatureImages.length);
+    }, 2000);
 
-    try {
-      const imageData = await compressImageToDataUrl(file);
-      setFeatureForm((current) => ({
-        ...current,
-        coverImageText: imageData,
-      }));
+    return () => window.clearInterval(intervalId);
+  }, [
+    selectedMapHoveredFeatureHasVideoPreview,
+    selectedMapHoveredFeatureId,
+    selectedMapHoveredFeatureImages.length,
+  ]);
 
-      if (imageData.length > 950_000) {
-        setFeedback("Imagem de capa muito grande para salvar. Tente uma menor.");
-      } else {
-        setFeedback("Imagem de capa pronta para salvar.");
-      }
-    } catch {
-      setFeedback("Nao foi possivel processar a imagem de capa.");
-    } finally {
-      setCoverProcessingImage(false);
-    }
+  const openExpandedFeature = (featureId: string) => {
+    const nextExpandedFeatureId = expandedFeatureId === featureId ? null : featureId;
+    setExpandedFeatureId(nextExpandedFeatureId);
+    setActiveExpandedImageIndex(0);
+  };
+
+  const goToFeature = (featureId: string) => {
+    setExpandedFeatureId(featureId);
+    setActiveExpandedImageIndex(0);
+
+    window.requestAnimationFrame(() => {
+      document.getElementById(`feature-${featureId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  };
+
+  const openImageViewer = (src: string, alt: string, zoomEnabled: boolean) => {
+    setImageViewer({ src, alt, zoomEnabled });
+    setImageViewerZoom(2);
+  };
+
+  const closeImageViewer = () => {
+    setImageViewer(null);
+    setImageViewerZoom(2);
   };
 
   const openNewFeatureModal = () => {
@@ -1026,8 +1161,16 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
       launchPoint: normalizeMapPoint(feature.launchPoint),
       impactPoint: normalizeMapPoint(feature.impactPoint),
       description: feature.description ?? "",
-      coverImageText: feature.coverImageText ?? feature.imageTexts?.[0] ?? feature.imageText ?? feature.imageUrl ?? "",
+      coverImageText: pickFirstNonEmptyText(
+        feature.coverImageText,
+        feature.imageTexts?.[0],
+        feature.imageText,
+        feature.imageUrl
+      ),
       imageTexts: feature.imageTexts?.filter(Boolean) ?? [feature.imageText ?? feature.imageUrl ?? ""].filter(Boolean),
+      imageZoomEnabled: (feature.imageTexts?.filter(Boolean) ?? [feature.imageText ?? feature.imageUrl ?? ""].filter(Boolean)).map(
+        (_, index) => feature.imageZoomEnabled?.[index] ?? false
+      ),
       youtubeUrl: feature.youtubeUrl ?? "",
     });
     setMapSelectionMode("launch");
@@ -1087,7 +1230,8 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
         description: featureForm.description.trim(),
         coverImageText: featureForm.coverImageText.trim(),
         imageTexts: featureForm.imageTexts,
-        imageText: featureForm.imageTexts[0] ?? "",
+        imageZoomEnabled: featureForm.imageTexts.map((_, index) => featureForm.imageZoomEnabled[index] ?? false),
+        imageText: pickFirstNonEmptyText(featureForm.imageTexts[0], featureForm.coverImageText),
         youtubeUrl: featureForm.youtubeUrl.trim(),
         updatedAt: serverTimestamp(),
       };
@@ -1157,26 +1301,6 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
     } catch {
       setFeedback("Nao foi possivel copiar o comando.");
     }
-  };
-
-  const openImageViewer = (src: string, alt: string) => {
-    setImageViewer({ src, alt });
-    setImageZoom(1);
-  };
-
-  const closeImageViewer = () => {
-    setImageViewer(null);
-    setImageZoom(1);
-  };
-
-  const applyZoom = (nextZoom: number) => {
-    setImageZoom(Math.min(4, Math.max(0.6, nextZoom)));
-  };
-
-  const onImageWheel = (event: WheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const delta = event.deltaY < 0 ? 0.15 : -0.15;
-    applyZoom(imageZoom + delta);
   };
 
   const submitComment = async (event: FormEvent, featureId: string) => {
@@ -1302,7 +1426,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
 
       <section className="mt-4">
         <div className="grid items-start gap-4 lg:grid-cols-[280px_1fr]">
-          <aside className="rounded-2xl border border-slate-700 bg-slate-900/75 p-4 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-5 lg:sticky lg:top-24">
+          <aside className="rounded-2xl border border-slate-700 bg-slate-900/75 p-4 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-5 lg:sticky lg:top-6">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-semibold uppercase tracking-[0.08em] text-slate-200">
                 Filtros
@@ -1616,57 +1740,91 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
 
                     <div className="rounded-2xl border border-slate-700 bg-slate-900/65 p-4">
                       {!selectedMapFocus ? (
-                        <div className="space-y-3 text-sm text-slate-300">
-                          <p className="text-slate-200">
-                            Clique em um ponto verde de lancamento ou em um ponto laranja de impacto para ver os pares relacionados.
-                          </p>
-                          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/55 p-4 text-slate-400">
-                            O mapa mostra cada granada como uma linha tracejada entre os dois pontos registrados.
-                          </div>
+                        <div className="flex min-h-48 items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/40 px-4 text-sm text-slate-400">
+                          Selecione um ponto no mapa para ver as granadas relacionadas.
                         </div>
                       ) : (
-                        <div className="space-y-4">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.14em] text-orange-300">
-                              {selectedMapFocus.kind === "launch" ? "Lancamento selecionado" : "Impacto selecionado"}
-                            </p>
-                            <h3 className="mt-1 text-lg font-semibold text-white">
-                              {selectedMapFocusedFeatures.length} granadas relacionadas
-                            </h3>
-                          </div>
+                        <div className="space-y-3">
+                          {selectedMapFocusedFeatures.length === 0 ? (
+                            <p className="text-sm text-slate-400">Nenhuma granada encontrada para este ponto.</p>
+                          ) : (
+                            selectedMapFocusedFeatures.map((feature) => {
+                              const isHovered = selectedMapHoveredFeatureId === feature.id;
 
-                          <div className="space-y-3">
-                            {selectedMapFocusedFeatures.length === 0 ? (
-                              <p className="text-sm text-slate-400">Nenhuma granada encontrada para este ponto.</p>
-                            ) : (
-                              selectedMapFocusedFeatures.map((feature) => {
-                                const counterpartPoint =
-                                  selectedMapFocus.kind === "launch" ? feature.impactPoint : feature.launchPoint;
+                              return (
+                                <button
+                                  key={feature.id}
+                                  type="button"
+                                  className="relative group w-full rounded-xl border border-slate-700 bg-slate-950/75 p-3 text-left transition hover:border-orange-300 hover:bg-slate-900"
+                                  onMouseEnter={() => {
+                                    setSelectedMapHoveredFeatureId(feature.id);
+                                    setSelectedMapHoveredImageIndex(0);
+                                  }}
+                                  onMouseLeave={() => {
+                                    setSelectedMapHoveredFeatureId((current) => (current === feature.id ? null : current));
+                                    setSelectedMapHoveredImageIndex(0);
+                                  }}
+                                  onClick={() => goToFeature(feature.id)}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0 space-y-1">
+                                      <p className="text-sm font-semibold uppercase tracking-[0.04em] text-white">
+                                        {feature.title}
+                                      </p>
+                                    </div>
 
-                                return (
-                                  <button
-                                    key={feature.id}
-                                    type="button"
-                                    onClick={() => {
-                                      if (!counterpartPoint) {
-                                        return;
-                                      }
+                                    <span className="shrink-0 rounded-full border border-slate-700 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300 transition group-hover:border-orange-300 group-hover:text-orange-200">
+                                      Abrir
+                                    </span>
+                                  </div>
 
-                                      setSelectedMapFocus({
-                                        kind: selectedMapFocus.kind === "launch" ? "impact" : "launch",
-                                        pointKey: getPointKey(counterpartPoint),
-                                      });
-                                    }}
-                                    className="w-full rounded-xl border border-slate-700 bg-slate-950/75 p-3 text-left transition hover:border-orange-300 hover:bg-slate-900"
-                                  >
-                                    <p className="text-sm font-semibold uppercase tracking-[0.04em] text-white">
-                                      {feature.title}
-                                    </p>
-                                  </button>
-                                );
-                              })
-                            )}
-                          </div>
+                                  {isHovered && (
+                                    <div className="pointer-events-none absolute left-1/2 top-0 z-40 w-[min(72vw,18rem)] -translate-x-1/2 -translate-y-[calc(100%+0.6rem)] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-[0_24px_60px_rgba(0,0,0,.45)]">
+                                      <div className="border-b border-slate-700 bg-slate-900/80 px-3 py-2">
+                                        <p className="text-xs uppercase tracking-[0.14em] text-orange-300">Preview da granada</p>
+                                        <p className="mt-1 text-sm font-semibold text-white">{feature.title}</p>
+                                      </div>
+
+                                      <div className="relative aspect-video bg-slate-950">
+                                        {selectedMapHoveredFeatureVideoUrl ? (
+                                          <iframe
+                                            className="h-full w-full"
+                                            src={selectedMapHoveredFeatureVideoUrl}
+                                            title={`${feature.title} preview`}
+                                            allow="autoplay; encrypted-media; picture-in-picture"
+                                            allowFullScreen
+                                          />
+                                        ) : selectedMapHoveredFeatureImages.length > 0 ? (
+                                          <>
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img
+                                              src={
+                                                selectedMapHoveredFeatureImages[
+                                                  selectedMapHoveredImageIndex % selectedMapHoveredFeatureImages.length
+                                                ]
+                                              }
+                                              alt={feature.title}
+                                              className="h-full w-full object-cover"
+                                            />
+                                            {selectedMapHoveredFeatureImages.length > 1 && (
+                                              <div className="absolute bottom-2 right-2 rounded-full border border-slate-700 bg-slate-950/80 px-2 py-0.5 text-[10px] text-slate-300">
+                                                {selectedMapHoveredImageIndex % selectedMapHoveredFeatureImages.length + 1}/
+                                                {selectedMapHoveredFeatureImages.length}
+                                              </div>
+                                            )}
+                                          </>
+                                        ) : (
+                                          <div className="flex h-full w-full items-center justify-center text-sm text-slate-400">
+                                            Sem preview disponivel
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })
+                          )}
                         </div>
                       )}
                     </div>
@@ -1691,14 +1849,14 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
             const imageList = feature.imageTexts?.length
               ? feature.imageTexts
               : [feature.imageText ?? feature.imageUrl ?? ""].filter(Boolean);
-            const coverImageText = feature.coverImageText ?? imageList[0] ?? "";
+            const coverImageText = pickFirstNonEmptyText(feature.coverImageText, imageList[0]);
             const embedUrl = getYouTubeEmbedUrl(feature.youtubeUrl);
             const videoThumbnailUrl = getYouTubeThumbnailUrl(feature.youtubeUrl);
             const renderableImage = coverImageText.startsWith("data:") || coverImageText.startsWith("http")
               ? coverImageText
               : "";
             const isExpanded = expandedFeatureId === feature.id;
-            const featureTitleSizeClass = getFeatureTitleSizeClass(feature.title);
+            const featureTitleSizeClass = getFeatureTitleSizeClass(feature.title, !isExpanded);
             const grenadeTypeIconCandidates = getGrenadeTypeIconCandidates(feature.grenadeType);
             const mapIconCandidates = getMapIconCandidates(feature.map);
             const videoHoverPreviewUrl = getYouTubeHoverPreviewUrl(feature.youtubeUrl);
@@ -1711,12 +1869,20 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                     .filter((src) => src.startsWith("data:") || src.startsWith("http"))
                 )
               );
+              const modalImageSources = Array.from(
+                new Set(
+                  imageList
+                    .map((src) => src.trim())
+                    .filter((src) => src.startsWith("data:") || src.startsWith("http"))
+                )
+              );
 
               const mediaItems = [
-                ...mediaImageSources.map((src) => ({
+                ...modalImageSources.map((src, index) => ({
                   type: "image" as const,
                   src,
                   label: "Imagem",
+                  zoomEnabled: feature.imageZoomEnabled?.[index] !== false,
                 })),
                 ...(embedUrl
                   ? [
@@ -1740,6 +1906,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                 hoveredFeatureId === feature.id &&
                 !videoHoverPreviewUrl &&
                 mediaImageSources.length > 1;
+              const compactCardCoverSources = mediaImageSources.slice(0, 2);
               const compactCardImage = showImageHoverSlideshow
                 ? mediaImageSources[hoveredImageIndex % mediaImageSources.length]
                 : renderableImage;
@@ -1767,8 +1934,9 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
             return (
               <article
                 key={feature.id}
-                className={`rounded-2xl border border-slate-700/70 bg-slate-900/75 p-4 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-5 ${
-                  isExpanded ? "col-span-full" : ""
+                id={`feature-${feature.id}`}
+                className={`relative rounded-2xl border border-slate-700/70 bg-slate-900/75 p-4 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-5 ${
+                  isExpanded ? "order-first col-span-full z-30" : "z-0"
                 }`}
               >
                 <div
@@ -1899,14 +2067,38 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                             }}
                           />
                         ) : compactCardImage ? (
-                          <>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={compactCardImage}
-                              alt={feature.title}
-                              className="h-full w-full object-cover"
-                            />
-                          </>
+                          showImageHoverSlideshow ? (
+                            <>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={compactCardImage}
+                                alt={feature.title}
+                                className="h-full w-full object-cover"
+                              />
+                            </>
+                          ) : compactCardCoverSources.length >= 2 ? (
+                            <div className="flex h-full w-full">
+                              {compactCardCoverSources.map((src, index) => (
+                                <div key={`${feature.id}-cover-${index}`} className="h-full w-1/2 overflow-hidden">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={src}
+                                    alt={`${feature.title} capa ${index + 1}`}
+                                    className="h-full w-full object-cover object-center"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={compactCardImage}
+                                alt={feature.title}
+                                className="h-full w-full object-cover"
+                              />
+                            </>
+                          )
                         ) : (
                           <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">
                             Sem capa
@@ -1988,18 +2180,49 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                         <div className="grid gap-3 lg:grid-cols-[1fr_160px] lg:items-start">
                           <div className="relative overflow-hidden rounded-xl border border-slate-700 bg-slate-950/60">
                             {activeMediaItem.type === "image" ? (
-                              <button
-                                type="button"
-                                onClick={() => openImageViewer(activeMediaItem.src, feature.title)}
-                                className="block w-full"
-                              >
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={activeMediaItem.src}
-                                  alt={feature.title}
-                                  className="aspect-video h-auto w-full cursor-zoom-in object-cover"
-                                />
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openImageViewer(
+                                      activeMediaItem.src,
+                                      feature.title,
+                                      activeMediaItem.type === "image"
+                                        ? activeMediaItem.zoomEnabled !== false
+                                        : false
+                                    )
+                                  }
+                                  className="block w-full"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={activeMediaItem.src}
+                                    alt={feature.title}
+                                    className="aspect-video h-auto w-full cursor-zoom-in object-cover"
+                                  />
+                                </button>
+
+                                {activeMediaItem.type === "image" && activeMediaItem.zoomEnabled !== false && (
+                                  <div className="absolute bottom-3 left-3 z-20">
+                                    <ZoomSlider
+                                      value={imageViewerZoom}
+                                      onChange={setImageViewerZoom}
+                                      label="Zoom"
+                                      hint="Na página"
+                                      className="w-[min(72vw,26rem)]"
+                                    />
+                                  </div>
+                                )}
+
+                                {activeMediaItem.type === "image" && activeMediaItem.zoomEnabled !== false && (
+                                  <ZoomLens
+                                    src={activeMediaItem.src}
+                                    alt={feature.title}
+                                    zoom={imageViewerZoom}
+                                    className="h-44 w-44 md:h-76 md:w-76"
+                                  />
+                                )}
+                              </>
                             ) : (
                               <iframe
                                 className="aspect-video w-full"
@@ -2085,24 +2308,22 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                                         className="aspect-video w-32 object-cover md:w-40 lg:w-full"
                                       />
                                     </>
+                                  ) : media.thumbnail ? (
+                                    <div className="relative">
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={media.thumbnail}
+                                        alt={`${feature.title} video`}
+                                        className="aspect-video w-32 object-cover md:w-40 lg:w-full"
+                                      />
+                                      <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-2xl text-white/95">
+                                        ▶
+                                      </span>
+                                    </div>
                                   ) : (
-                                    media.thumbnail ? (
-                                      <div className="relative">
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img
-                                          src={media.thumbnail}
-                                          alt={`${feature.title} video`}
-                                          className="aspect-video w-32 object-cover md:w-40 lg:w-full"
-                                        />
-                                        <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-2xl text-white/95">
-                                          ▶
-                                        </span>
-                                      </div>
-                                    ) : (
-                                      <div className="flex aspect-video w-32 items-center justify-center bg-slate-900 text-xs font-semibold text-slate-200 md:w-40 lg:w-full">
-                                        Video
-                                      </div>
-                                    )
+                                    <div className="flex aspect-video w-32 items-center justify-center bg-slate-900 text-xs font-semibold text-slate-200 md:w-40 lg:w-full">
+                                      Video
+                                    </div>
                                   )}
                                 </button>
                               ))}
@@ -2612,42 +2833,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                 </label>
               </div>
 
-              <label className="space-y-2 text-sm text-slate-300">
-                <span>Imagem de capa</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition file:mr-4 file:rounded-md file:border-0 file:bg-orange-400 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-950 focus:border-orange-300"
-                  onChange={(event) => void handleCoverImageUpload(event.target.files?.[0] ?? null)}
-                />
-                <span className="block text-xs text-slate-500">
-                  Essa imagem sera usada apenas quando o card estiver minimizado.
-                </span>
-                {coverProcessingImage && (
-                  <span className="block text-xs text-orange-300">Processando imagem de capa...</span>
-                )}
-              </label>
-
-              {featureForm.coverImageText && (
-                <div className="space-y-2 rounded-xl border border-slate-700 bg-slate-950/60 p-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={featureForm.coverImageText} alt="Preview da imagem de capa" className="h-36 w-full rounded-md object-cover" />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setFeatureForm((current) => ({
-                        ...current,
-                        coverImageText: "",
-                      }))
-                    }
-                    className="w-full rounded-md border border-red-500/50 bg-red-950/30 px-3 py-1.5 text-xs font-semibold text-red-200 transition hover:border-red-300"
-                  >
-                    Remover capa
-                  </button>
-                </div>
-              )}
-
-              <label className="space-y-2 text-sm text-slate-300">
+              <div className="space-y-2 text-sm text-slate-300">
                 <span>Imagem</span>
                 <input
                   type="file"
@@ -2660,32 +2846,59 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                   }}
                 />
                 <span className="block text-xs text-slate-500">
-                  Adicione ate 5 imagens. Elas serao convertidas e salvas como texto no Firestore.
+                  Adicione ate 5 imagens. Depois use o botao de zoom em qualquer preview para editar essa imagem.
                 </span>
                 {processingImage && (
                   <span className="block text-xs text-orange-300">Processando imagem...</span>
                 )}
-              </label>
+              </div>
 
               {featureForm.imageTexts.length > 0 && (
                 <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Imagens adicionadas</p>
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     {featureForm.imageTexts.map((src, index) => (
                       <div key={`preview-${index}`} className="space-y-2 rounded-xl border border-slate-700 bg-slate-950/60 p-2">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={src} alt={`Preview ${index + 1}`} className="h-28 w-full rounded-md object-cover" />
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setFeatureForm((current) => ({
-                              ...current,
-                              imageTexts: current.imageTexts.filter((_, currentIndex) => currentIndex !== index),
-                            }))
-                          }
-                          className="w-full rounded-md border border-red-500/50 bg-red-950/30 px-3 py-1.5 text-xs font-semibold text-red-200 transition hover:border-red-300"
-                        >
-                          Remover imagem
-                        </button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFeatureForm((current) => ({
+                                ...current,
+                                imageZoomEnabled: current.imageZoomEnabled.map((value, currentIndex) =>
+                                  currentIndex === index ? !value : value
+                                ),
+                              }))
+                            }
+                            className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
+                              featureForm.imageZoomEnabled[index] !== false
+                                ? "border-orange-300/45 bg-orange-400/10 text-orange-200 hover:bg-orange-400/20"
+                                : "border-slate-600 bg-slate-900 text-slate-300 hover:border-slate-400"
+                            }`}
+                          >
+                            {featureForm.imageZoomEnabled[index] !== false ? "Desativar zoom" : "Ativar zoom"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFeatureForm((current) => {
+                                const nextImages = current.imageTexts.filter((_, currentIndex) => currentIndex !== index);
+                                const nextZoomEnabled = current.imageZoomEnabled.filter((_, currentIndex) => currentIndex !== index);
+
+                                return {
+                                  ...current,
+                                  imageTexts: nextImages,
+                                  imageZoomEnabled: nextZoomEnabled,
+                                };
+                              })
+                            }
+                            className="rounded-md border border-red-500/50 bg-red-950/30 px-3 py-1.5 text-xs font-semibold text-red-200 transition hover:border-red-300"
+                          >
+                            Remover
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2739,10 +2952,10 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                 </button>
                 <button
                   type="submit"
-                  disabled={saving || processingImage || coverProcessingImage}
+                  disabled={saving}
                   className="rounded-lg border border-orange-300/45 bg-linear-to-r from-orange-400 to-orange-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {processingImage || coverProcessingImage ? "Aguarde imagem" : "Salvar"}
+                  Salvar
                 </button>
               </div>
             </form>
@@ -2760,51 +2973,56 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <p className="max-w-[70%] truncate text-sm text-slate-300 md:text-base">{imageViewer.alt}</p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => applyZoom(imageZoom - 0.2)}
-                  className="rounded-md border border-slate-500 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 transition hover:border-slate-300"
-                >
-                  -
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyZoom(1)}
-                  className="rounded-md border border-slate-500 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 transition hover:border-slate-300"
-                >
-                  {`${Math.round(imageZoom * 100)}%`}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyZoom(imageZoom + 0.2)}
-                  className="rounded-md border border-slate-500 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 transition hover:border-slate-300"
-                >
-                  +
-                </button>
-                <button
-                  type="button"
-                  onClick={closeImageViewer}
-                  className="rounded-md border border-red-500/50 bg-red-950/30 px-3 py-1.5 text-sm text-red-200 transition hover:border-red-300"
-                >
-                  Fechar
-                </button>
+              <div>
+                <p className="text-sm text-slate-300 md:text-base">{imageViewer.alt}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {imageViewer.zoomEnabled
+                    ? "Use o controle circular para ajustar o zoom."
+                    : "Zoom desativado para esta imagem."}
+                </p>
               </div>
+
+              <button
+                type="button"
+                onClick={closeImageViewer}
+                className="rounded-md border border-red-500/50 bg-red-950/30 px-3 py-1.5 text-sm text-red-200 transition hover:border-red-300"
+              >
+                Fechar
+              </button>
             </div>
 
-            <div
-              className="max-h-[75vh] overflow-auto rounded-xl border border-slate-700 bg-black"
-              onWheel={onImageWheel}
-            >
-              <div className="flex min-h-[50vh] items-center justify-center p-4">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={imageViewer.src}
-                  alt={imageViewer.alt}
-                  className="max-h-[70vh] max-w-full select-none object-contain transition duration-150"
-                  style={{ transform: `scale(${imageZoom})` }}
-                />
+            <div className="space-y-4">
+              <div className="relative overflow-hidden rounded-xl border border-slate-700 bg-black">
+                <button type="button" className="flex min-h-[50vh] w-full items-center justify-center p-4">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={imageViewer.src}
+                    alt={imageViewer.alt}
+                    className="max-h-[70vh] max-w-full select-none object-contain transition duration-150"
+                    style={{ transform: `scale(${imageViewerZoom})` }}
+                  />
+                </button>
+
+                {imageViewer.zoomEnabled && (
+                  <>
+                    <div className="absolute bottom-4 left-4 z-20">
+                      <ZoomSlider
+                        value={imageViewerZoom}
+                        onChange={setImageViewerZoom}
+                        label="Zoom"
+                        hint="No modal"
+                        className="w-[min(72vw,28rem)]"
+                      />
+                    </div>
+
+                    <ZoomLens
+                      src={imageViewer.src}
+                      alt={imageViewer.alt}
+                      zoom={imageViewerZoom}
+                      className="h-48 w-48 md:h-64 md:w-64"
+                    />
+                  </>
+                )}
               </div>
             </div>
           </div>
