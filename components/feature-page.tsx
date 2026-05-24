@@ -15,6 +15,7 @@ import { FormEvent, WheelEvent, useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/firebase";
 import { isCommentModerator, isFeatureManager } from "@/lib/roles";
 import { useAuthSession } from "@/components/auth-provider";
+import { GrenadeMapScene, type MapPoint } from "@/components/grenade-map-scene";
 
 export type FeatureCategory = "granadas" | "movimentacoes" | "taticas";
 
@@ -30,6 +31,8 @@ type FeatureItem = {
   location?: string;
   position?: string;
   teleportCommand?: string;
+  launchPoint?: MapPoint | null;
+  impactPoint?: MapPoint | null;
   description: string;
   coverImageText?: string;
   imageTexts?: string[];
@@ -59,6 +62,11 @@ type FeaturePageProps = {
   intro: string;
   points: string[];
   showHero?: boolean;
+};
+
+type GrenadeMapFocus = {
+  kind: "launch" | "impact";
+  pointKey: string;
 };
 
 type CategoryCopy = {
@@ -95,6 +103,8 @@ type FeatureFormState = {
   location: string;
   position: string;
   teleportCommand: string;
+  launchPoint: MapPoint | null;
+  impactPoint: MapPoint | null;
   description: string;
   coverImageText: string;
   imageTexts: string[];
@@ -111,6 +121,8 @@ const emptyFeatureForm = (): FeatureFormState => ({
   location: "",
   position: "Respawn",
   teleportCommand: "",
+  launchPoint: null,
+  impactPoint: null,
   description: "",
   coverImageText: "",
   imageTexts: [],
@@ -266,6 +278,22 @@ const mapIconByKey: Record<string, string> = {
   overpass: "/assets/icons/maps/overpass.png",
   train: "/assets/icons/maps/train.png",
   vertigo: "/assets/icons/maps/vertigo.png",
+};
+
+const mapOverviewByKey: Record<string, string> = {
+  ancient: "/assets/icons/overviews/de_ancient_radar_psd.png",
+  ancientnight: "/assets/icons/overviews/de_ancient_night_radar_psd.png",
+  anubis: "/assets/icons/overviews/de_anubis_radar_psd.png",
+  dustii: "/assets/icons/overviews/de_dust2_radar_psd.png",
+  dust2: "/assets/icons/overviews/de_dust2_radar_psd.png",
+  "dust-2": "/assets/icons/overviews/de_dust2_radar_psd.png",
+  "dust-ii": "/assets/icons/overviews/de_dust2_radar_psd.png",
+  inferno: "/assets/icons/overviews/de_inferno_radar_psd.png",
+  mirage: "/assets/icons/overviews/de_mirage_radar_psd.png",
+  nuke: "/assets/icons/overviews/de_nuke_radar_psd.png",
+  overpass: "/assets/icons/overviews/de_overpass_radar_psd.png",
+  train: "/assets/icons/overviews/de_train_radar_psd.png",
+  vertigo: "/assets/icons/overviews/de_vertigo_radar_psd.png",
 };
 
 const grenadeTypeAliases: Record<string, string[]> = {
@@ -425,6 +453,110 @@ function getMapIconCandidates(mapName?: string) {
   return uniqueValues(candidates);
 }
 
+function getMapOverviewCandidates(mapName?: string) {
+  if (!mapName?.trim()) {
+    return [];
+  }
+
+  const slug = slugifyIconName(mapName);
+  const compactSlug = slug.replace(/-/g, "");
+  const aliases = mapNameAliases[slug] ?? [slug, compactSlug];
+  const candidates = aliases
+    .map((alias) => mapOverviewByKey[slugifyIconName(alias)] ?? mapOverviewByKey[alias])
+    .filter((imagePath): imagePath is string => Boolean(imagePath));
+
+  if (candidates.length > 0) {
+    return uniqueValues(candidates);
+  }
+
+  return getMapIconCandidates(mapName);
+}
+
+function getMapOverviewSource(mapName?: string) {
+  return getMapOverviewCandidates(mapName)[0] ?? "";
+}
+
+function normalizeMapPoint(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const point = value as { x?: number; y?: number };
+
+  if (typeof point.x !== "number" || typeof point.y !== "number") {
+    return null;
+  }
+
+  return {
+    x: Number(point.x.toFixed(1)),
+    y: Number(point.y.toFixed(1)),
+  } satisfies MapPoint;
+}
+
+function formatMapPoint(point?: MapPoint | null) {
+  if (!point) {
+    return "";
+  }
+
+  return `${point.x.toFixed(1)}%, ${point.y.toFixed(1)}%`;
+}
+
+function getPointKey(point?: MapPoint | null) {
+  if (!point) {
+    return "";
+  }
+
+  return `${point.x.toFixed(1)}:${point.y.toFixed(1)}`;
+}
+
+type PointCatalogEntry = {
+  key: string;
+  point: MapPoint;
+  titles: string[];
+};
+
+function buildPointCatalog(features: FeatureItem[], kind: "launch" | "impact") {
+  const catalog = new Map<string, PointCatalogEntry>();
+
+  for (const feature of features) {
+    const point = kind === "launch" ? feature.launchPoint : feature.impactPoint;
+    if (!point) {
+      continue;
+    }
+
+    const key = getPointKey(point);
+    const existing = catalog.get(key);
+
+    if (existing) {
+      existing.titles.push(feature.title);
+      continue;
+    }
+
+    catalog.set(key, {
+      key,
+      point,
+      titles: [feature.title],
+    });
+  }
+
+  return Array.from(catalog.values()).sort((first, second) => first.key.localeCompare(second.key));
+}
+
+function mapFeatureToGrenadeEntry(feature: FeatureItem) {
+  return {
+    id: feature.id,
+    title: feature.title,
+    grenadeType: feature.grenadeType,
+    launchPoint: feature.launchPoint,
+    impactPoint: feature.impactPoint,
+    youtubeUrl: feature.youtubeUrl,
+    coverImageText: feature.coverImageText,
+    imageTexts: feature.imageTexts,
+    imageText: feature.imageText,
+    imageUrl: feature.imageUrl,
+  };
+}
+
 type IconWithFallbackProps = {
   candidates: string[];
   alt: string;
@@ -526,6 +658,8 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
   const [hoveredFeatureId, setHoveredFeatureId] = useState<string | null>(null);
   const [hoveredImageIndex, setHoveredImageIndex] = useState(0);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [selectedMapFocus, setSelectedMapFocus] = useState<GrenadeMapFocus | null>(null);
+  const [mapSelectionMode, setMapSelectionMode] = useState<"launch" | "impact">("launch");
 
   const canAddFeature = isFeatureManager(role);
   const canModerateComments = isCommentModerator(role);
@@ -625,6 +759,10 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
       setFilterLocation("");
     }
   }, [availableImpactLocations, filterLocation]);
+
+  useEffect(() => {
+    setSelectedMapFocus(null);
+  }, [filterMap]);
 
   const filteredFeatures = useMemo(
     () =>
@@ -732,6 +870,64 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
     return () => window.clearInterval(intervalId);
   }, [hoveredFeatureHasVideoPreview, hoveredFeatureId, hoveredFeatureImages.length]);
 
+  const selectedMapFeatures = useMemo(
+    () =>
+      features.filter(
+        (feature) => isSameMap(feature.map, filterMap) && feature.launchPoint && feature.impactPoint
+      ),
+    [features, filterMap]
+  );
+
+  const currentMapFeatures = useMemo(() => {
+    if (!featureForm.map.trim()) {
+      return [] as FeatureItem[];
+    }
+
+    return features.filter(
+      (feature) => isSameMap(feature.map, featureForm.map) && feature.launchPoint && feature.impactPoint
+    );
+  }, [featureForm.map, features]);
+
+  const currentMapLaunchPoints = useMemo(
+    () => buildPointCatalog(currentMapFeatures, "launch"),
+    [currentMapFeatures]
+  );
+
+  const currentMapImpactPoints = useMemo(
+    () => buildPointCatalog(currentMapFeatures, "impact"),
+    [currentMapFeatures]
+  );
+
+  const selectedMapEntries = useMemo(
+    () => selectedMapFeatures.map(mapFeatureToGrenadeEntry),
+    [selectedMapFeatures]
+  );
+
+  const currentMapEntries = useMemo(
+    () => currentMapFeatures.map(mapFeatureToGrenadeEntry),
+    [currentMapFeatures]
+  );
+
+  const selectedMapOverviewSource = useMemo(
+    () => getMapOverviewSource(filterMap),
+    [filterMap]
+  );
+
+  const selectedMapFocusedFeatures = useMemo(() => {
+    if (!selectedMapFocus) {
+      return [] as FeatureItem[];
+    }
+
+    return selectedMapFeatures.filter((feature) => {
+      const pointKey =
+        selectedMapFocus.kind === "launch"
+          ? getPointKey(feature.launchPoint)
+          : getPointKey(feature.impactPoint);
+
+      return pointKey === selectedMapFocus.pointKey;
+    });
+  }, [selectedMapFeatures, selectedMapFocus]);
+
   const openExpandedFeature = (featureId: string) => {
     const nextExpandedFeatureId = expandedFeatureId === featureId ? null : featureId;
     setExpandedFeatureId(nextExpandedFeatureId);
@@ -810,6 +1006,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
   const openNewFeatureModal = () => {
     setEditingFeature(null);
     setFeatureForm(emptyFeatureForm());
+    setMapSelectionMode("launch");
     setFeedback("");
     setFeatureModalOpen(true);
   };
@@ -826,11 +1023,14 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
       location: feature.location ?? "",
       position: normalizePosition(feature.position) || "Respawn",
       teleportCommand: feature.teleportCommand ?? "",
+      launchPoint: normalizeMapPoint(feature.launchPoint),
+      impactPoint: normalizeMapPoint(feature.impactPoint),
       description: feature.description ?? "",
       coverImageText: feature.coverImageText ?? feature.imageTexts?.[0] ?? feature.imageText ?? feature.imageUrl ?? "",
       imageTexts: feature.imageTexts?.filter(Boolean) ?? [feature.imageText ?? feature.imageUrl ?? ""].filter(Boolean),
       youtubeUrl: feature.youtubeUrl ?? "",
     });
+    setMapSelectionMode("launch");
     setFeedback("");
     setFeatureModalOpen(true);
   };
@@ -839,6 +1039,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
     setFeatureModalOpen(false);
     setEditingFeature(null);
     setFeatureForm(emptyFeatureForm());
+    setMapSelectionMode("launch");
   };
 
   const submitFeature = async (event: FormEvent) => {
@@ -862,6 +1063,11 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
       return;
     }
 
+    if (isGranadas && !editingFeature && (!featureForm.launchPoint || !featureForm.impactPoint)) {
+      setFeedback("Marque os pontos de lancamento e impacto no mapa antes de salvar.");
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -876,6 +1082,8 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
         location: featureForm.location.trim(),
         position: featureForm.position.trim(),
         teleportCommand: featureForm.teleportCommand.trim(),
+        launchPoint: featureForm.launchPoint ?? null,
+        impactPoint: featureForm.impactPoint ?? null,
         description: featureForm.description.trim(),
         coverImageText: featureForm.coverImageText.trim(),
         imageTexts: featureForm.imageTexts,
@@ -1348,6 +1556,129 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
           </aside>
 
           <div>
+            {isGranadasCategory && (
+              <section className="mb-6 rounded-3xl border border-slate-700/70 bg-slate-950/75 p-4 shadow-[0_18px_40px_rgba(0,0,0,.28)] md:p-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.16em] text-orange-300">Mapa tatico</p>
+                    <h2 className="mt-1 text-xl font-semibold text-white md:text-2xl">
+                      {filterMap ? `Granadas de ${filterMap}` : "Selecione um mapa para visualizar os pontos"}
+                    </h2>
+                    <p className="mt-2 max-w-3xl text-sm text-slate-400 md:text-base">
+                      {filterMap
+                        ? `${selectedMapFeatures.length} granadas com pontos registrados neste mapa. Clique nos pontos para alternar entre lancamentos e impactos relacionados.`
+                        : "Use o filtro de mapa na lateral ou no cadastro para abrir o overview e destacar os pontos cadastrados."}
+                    </p>
+                  </div>
+
+                  {selectedMapFocus && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMapFocus(null)}
+                      className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-300"
+                    >
+                      Limpar selecao
+                    </button>
+                  )}
+                </div>
+
+                {filterMap ? (
+                  <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+                    <GrenadeMapScene
+                      mapSrc={selectedMapOverviewSource}
+                      mapAlt={`Mapa ${filterMap}`}
+                      entries={selectedMapEntries}
+                      activeFocus={selectedMapFocus}
+                      revealMode="public"
+                      onLaunchClick={(entry) => {
+                        if (!entry.launchPoint) {
+                          return;
+                        }
+
+                        setSelectedMapFocus({
+                          kind: "launch",
+                          pointKey: getPointKey(entry.launchPoint),
+                        });
+                      }}
+                      onImpactClick={(entry) => {
+                        if (!entry.impactPoint) {
+                          return;
+                        }
+
+                        setSelectedMapFocus({
+                          kind: "impact",
+                          pointKey: getPointKey(entry.impactPoint),
+                        });
+                      }}
+                      onBackgroundClick={() => setSelectedMapFocus(null)}
+                      className="min-w-0"
+                    />
+
+                    <div className="rounded-2xl border border-slate-700 bg-slate-900/65 p-4">
+                      {!selectedMapFocus ? (
+                        <div className="space-y-3 text-sm text-slate-300">
+                          <p className="text-slate-200">
+                            Clique em um ponto verde de lancamento ou em um ponto laranja de impacto para ver os pares relacionados.
+                          </p>
+                          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/55 p-4 text-slate-400">
+                            O mapa mostra cada granada como uma linha tracejada entre os dois pontos registrados.
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.14em] text-orange-300">
+                              {selectedMapFocus.kind === "launch" ? "Lancamento selecionado" : "Impacto selecionado"}
+                            </p>
+                            <h3 className="mt-1 text-lg font-semibold text-white">
+                              {selectedMapFocusedFeatures.length} granadas relacionadas
+                            </h3>
+                          </div>
+
+                          <div className="space-y-3">
+                            {selectedMapFocusedFeatures.length === 0 ? (
+                              <p className="text-sm text-slate-400">Nenhuma granada encontrada para este ponto.</p>
+                            ) : (
+                              selectedMapFocusedFeatures.map((feature) => {
+                                const counterpartPoint =
+                                  selectedMapFocus.kind === "launch" ? feature.impactPoint : feature.launchPoint;
+
+                                return (
+                                  <button
+                                    key={feature.id}
+                                    type="button"
+                                    onClick={() => {
+                                      if (!counterpartPoint) {
+                                        return;
+                                      }
+
+                                      setSelectedMapFocus({
+                                        kind: selectedMapFocus.kind === "launch" ? "impact" : "launch",
+                                        pointKey: getPointKey(counterpartPoint),
+                                      });
+                                    }}
+                                    className="w-full rounded-xl border border-slate-700 bg-slate-950/75 p-3 text-left transition hover:border-orange-300 hover:bg-slate-900"
+                                  >
+                                    <p className="text-sm font-semibold uppercase tracking-[0.04em] text-white">
+                                      {feature.title}
+                                    </p>
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-2xl border border-dashed border-slate-700 bg-slate-900/55 p-5 text-sm text-slate-400">
+                    Selecione um mapa no filtro lateral para carregar o overview e exibir os pontos cadastrados.
+                  </div>
+                )}
+              </section>
+            )}
+
         {filteredFeatures.length === 0 ? (
           <div className="rounded-2xl border border-slate-700 bg-slate-900/75 p-6 text-slate-300">
             {`Nenhuma ${copy.singular} encontrada com esses filtros. `}
@@ -1634,6 +1965,16 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                       {feature.location && (
                         <span className="rounded-full border border-slate-700 px-2.5 py-1">
                           Local: {feature.location}
+                        </span>
+                      )}
+                      {feature.launchPoint && (
+                        <span className="rounded-full border border-emerald-400/35 px-2.5 py-1 text-emerald-100">
+                          Lançamento: {formatMapPoint(feature.launchPoint)}
+                        </span>
+                      )}
+                      {feature.impactPoint && (
+                        <span className="rounded-full border border-orange-400/35 px-2.5 py-1 text-orange-100">
+                          Impacto: {formatMapPoint(feature.impactPoint)}
                         </span>
                       )}
                     </div>
@@ -1983,7 +2324,12 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                     className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
                     value={featureForm.map}
                     onChange={(event) =>
-                      setFeatureForm((current) => ({ ...current, map: event.target.value }))
+                      setFeatureForm((current) => ({
+                        ...current,
+                        map: event.target.value,
+                        launchPoint: null,
+                        impactPoint: null,
+                      }))
                     }
                   >
                     <option value="">Selecione</option>
@@ -2007,6 +2353,193 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                   />
                 </label>
               </div>
+
+              {isGranadasCategory && (
+                <div className="space-y-4 rounded-2xl border border-slate-700 bg-slate-950/55 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.16em] text-orange-300">Pontos da granada</p>
+                      <h4 className="mt-1 text-lg font-semibold text-white">Clique no mapa para marcar o lançamento e o impacto</h4>
+                      <p className="mt-1 text-sm text-slate-400">
+                        Primeiro escolha o lançamento, depois o impacto. O painel abaixo mostra a posição selecionada em porcentagem do mapa.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setMapSelectionMode("launch")}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                          mapSelectionMode === "launch"
+                            ? "border-emerald-300 bg-emerald-300/15 text-emerald-100"
+                            : "border-slate-600 bg-slate-900 text-slate-300 hover:border-slate-400"
+                        }`}
+                      >
+                        Definir lançamento
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMapSelectionMode("impact")}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                          mapSelectionMode === "impact"
+                            ? "border-orange-300 bg-orange-300/15 text-orange-100"
+                            : "border-slate-600 bg-slate-900 text-slate-300 hover:border-slate-400"
+                        }`}
+                      >
+                        Definir impacto
+                      </button>
+                    </div>
+                  </div>
+
+                  <GrenadeMapScene
+                    mapSrc={getMapOverviewSource(featureForm.map)}
+                    mapAlt={featureForm.map || "Mapa da granada"}
+                    entries={currentMapEntries}
+                    revealMode="editor"
+                    interactive
+                    selectionMode={mapSelectionMode}
+                    selectedLaunchPoint={featureForm.launchPoint}
+                    selectedImpactPoint={featureForm.impactPoint}
+                    onMapClick={(point) => {
+                      setFeatureForm((current) =>
+                        mapSelectionMode === "launch"
+                          ? { ...current, launchPoint: point }
+                          : { ...current, impactPoint: point }
+                      );
+
+                      if (mapSelectionMode === "launch") {
+                        setMapSelectionMode("impact");
+                      }
+                    }}
+                    onLaunchClick={(entry) => {
+                      if (!entry.launchPoint) {
+                        return;
+                      }
+
+                      setFeatureForm((current) => ({
+                        ...current,
+                        launchPoint: entry.launchPoint ?? null,
+                      }));
+                      setMapSelectionMode("impact");
+                    }}
+                    onImpactClick={(entry) => {
+                      if (!entry.impactPoint) {
+                        return;
+                      }
+
+                      setFeatureForm((current) => ({
+                        ...current,
+                        impactPoint: entry.impactPoint ?? null,
+                      }));
+                      setMapSelectionMode("launch");
+                    }}
+                  />
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-xl border border-slate-700 bg-slate-900/75 p-3">
+                      <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Lançamento</p>
+                      <p className="mt-1 text-sm font-semibold text-white">
+                        {featureForm.launchPoint ? formatMapPoint(featureForm.launchPoint) : "Nenhum ponto marcado"}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setFeatureForm((current) => ({ ...current, launchPoint: null }))}
+                        className="mt-3 rounded-md border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-slate-300"
+                      >
+                        Limpar lançamento
+                      </button>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-700 bg-slate-900/75 p-3">
+                      <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Impacto</p>
+                      <p className="mt-1 text-sm font-semibold text-white">
+                        {featureForm.impactPoint ? formatMapPoint(featureForm.impactPoint) : "Nenhum ponto marcado"}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setFeatureForm((current) => ({ ...current, impactPoint: null }))}
+                        className="mt-3 rounded-md border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-slate-300"
+                      >
+                        Limpar impacto
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-xl border border-slate-700 bg-slate-900/55 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.12em] text-emerald-300">Lançamentos existentes</p>
+                          <h5 className="mt-1 text-sm font-semibold text-white">Clique para reutilizar um ponto já salvo</h5>
+                        </div>
+                        <span className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-400">
+                          {currentMapLaunchPoints.length}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {currentMapLaunchPoints.length === 0 ? (
+                          <p className="text-sm text-slate-400">Nenhum lançamento cadastrado para este mapa.</p>
+                        ) : (
+                          currentMapLaunchPoints.map((entry) => (
+                            <button
+                              key={entry.key}
+                              type="button"
+                              onClick={() => {
+                                setFeatureForm((current) => ({
+                                  ...current,
+                                  launchPoint: entry.point,
+                                }));
+                                setMapSelectionMode("impact");
+                              }}
+                              className="rounded-full border border-emerald-300/35 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:border-emerald-200"
+                              title={entry.titles.join(" • ")}
+                            >
+                              {formatMapPoint(entry.point)}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-700 bg-slate-900/55 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.12em] text-orange-300">Impactos existentes</p>
+                          <h5 className="mt-1 text-sm font-semibold text-white">Clique para reutilizar um ponto já salvo</h5>
+                        </div>
+                        <span className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-400">
+                          {currentMapImpactPoints.length}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {currentMapImpactPoints.length === 0 ? (
+                          <p className="text-sm text-slate-400">Nenhum impacto cadastrado para este mapa.</p>
+                        ) : (
+                          currentMapImpactPoints.map((entry) => (
+                            <button
+                              key={entry.key}
+                              type="button"
+                              onClick={() => {
+                                setFeatureForm((current) => ({
+                                  ...current,
+                                  impactPoint: entry.point,
+                                }));
+                                setMapSelectionMode("launch");
+                              }}
+                              className="rounded-full border border-orange-300/35 bg-orange-300/10 px-3 py-1.5 text-xs font-semibold text-orange-100 transition hover:border-orange-200"
+                              title={entry.titles.join(" • ")}
+                            >
+                              {formatMapPoint(entry.point)}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {isGranadasCategory && (
                 <div className="grid gap-4 md:grid-cols-3">
