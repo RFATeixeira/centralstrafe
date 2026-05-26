@@ -9,13 +9,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const CORE_VERSION = "0.12.9";
 const CORE_BASE_URL = `https://unpkg.com/@ffmpeg/core@${CORE_VERSION}/dist/umd`;
-const ZOOM_CROP_WIDTH = 0.28;
-const ZOOM_CROP_HEIGHT = 0.28;
-const ZOOM_INSET_RADIUS = 6;
-const ZOOM_INSET_OFFSET_X = 14;
-const ZOOM_INSET_OFFSET_Y = 22;
-const ZOOM_PREVIEW_SIZE = 32;
-const ZOOM_PREVIEW_SCALE = 8.2;
+const ZOOM_CROP_WIDTH = 0.1;
+const ZOOM_CROP_HEIGHT = 0.1;
+const ZOOM_INSET_RADIUS = 20;
+const ZOOM_INSET_OFFSET_X = 30;
+const ZOOM_INSET_OFFSET_Y = 72;
+const ZOOM_PREVIEW_SIZE = 30;
 const IMAGE_OVERLAY_DEFAULT_WIDTH = 22;
 const IMAGE_OVERLAY_DEFAULT_X = 8;
 const IMAGE_OVERLAY_DEFAULT_Y = 8;
@@ -147,6 +146,7 @@ export function VideoEditorPanel() {
 
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const loadPromiseRef = useRef<Promise<FFmpeg> | null>(null);
+  const lastFfmpegLogRef = useRef("");
   const outputPreviewRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -162,7 +162,7 @@ export function VideoEditorPanel() {
       return 0;
     }
 
-    return Math.max(2, Math.round(videoWidth * 0.7 / 2) * 2);
+    return Math.max(2, Math.round((videoWidth * ZOOM_PREVIEW_SIZE) / 100 / 2) * 2);
   }, [videoWidth]);
 
   const zoomOutputHeight = useMemo(() => {
@@ -170,7 +170,7 @@ export function VideoEditorPanel() {
       return 0;
     }
 
-    return Math.max(2, Math.round(videoHeight * 0.7 / 2) * 2);
+    return Math.max(2, Math.round((videoHeight * ZOOM_PREVIEW_SIZE) / 100 / 2) * 2);
   }, [videoHeight]);
 
   const zoomStartLabel = useMemo(() => formatSeconds(zoomStart), [zoomStart]);
@@ -594,13 +594,22 @@ export function VideoEditorPanel() {
     [],
   );
 
-  const previewInsetVideoStyle = useMemo(
-    () => ({
-      transform: `scale(${ZOOM_PREVIEW_SCALE})`,
+  const previewInsetVideoStyle = useMemo(() => {
+    if (!videoWidth || !zoomOutputWidth) {
+      return {
+        transform: `scale(1)`,
+        transformOrigin: "center center",
+      };
+    }
+
+    const cropWidth = videoWidth * ZOOM_CROP_WIDTH;
+    const scale = zoomOutputWidth / cropWidth || 1;
+
+    return {
+      transform: `scale(${scale})`,
       transformOrigin: "center center",
-    }),
-    [],
-  );
+    };
+  }, [videoWidth, zoomOutputWidth]);
 
   useEffect(() => {
     return () => {
@@ -731,6 +740,42 @@ export function VideoEditorPanel() {
     return blob;
   };
 
+  const createRoundedBorderBlob = async (width: number, height: number, radius: number, borderWidth: number) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      throw new Error("Nao foi possivel criar a borda do zoom.");
+    }
+
+    context.clearRect(0, 0, width, height);
+    context.strokeStyle = "rgba(0,0,0,0.8)";
+    context.lineWidth = borderWidth;
+    context.beginPath();
+    context.moveTo(radius, borderWidth / 8);
+    context.lineTo(width - radius, borderWidth / 8);
+    context.quadraticCurveTo(width - borderWidth / 8, borderWidth / 8, width - borderWidth / 8, radius);
+    context.lineTo(width - borderWidth / 8, height - radius);
+    context.quadraticCurveTo(width - borderWidth / 8, height - borderWidth / 8, width - radius, height - borderWidth / 8);
+    context.lineTo(radius, height - borderWidth / 8);
+    context.quadraticCurveTo(borderWidth / 8, height - borderWidth / 8, borderWidth / 8, height - radius);
+    context.lineTo(borderWidth / 8, radius);
+    context.quadraticCurveTo(borderWidth / 8, borderWidth / 8, radius, borderWidth / 8);
+    context.closePath();
+    context.stroke();
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+
+    if (!blob) {
+      throw new Error("Nao foi possivel gerar a borda do zoom.");
+    }
+
+    return blob;
+  };
+
   const ensureFFmpeg = async () => {
     if (ffmpegRef.current?.loaded) {
       return ffmpegRef.current;
@@ -742,6 +787,9 @@ export function VideoEditorPanel() {
 
     if (!ffmpegRef.current) {
       const ffmpeg = new FFmpeg();
+      ffmpeg.on("log", ({ message }) => {
+        lastFfmpegLogRef.current = message;
+      });
       ffmpeg.on("progress", ({ progress: ffmpegProgress }) => {
         setProgress(Math.max(0, Math.min(100, Math.round(ffmpegProgress * 100))));
       });
@@ -831,6 +879,7 @@ export function VideoEditorPanel() {
     const exportZoomEnd = Math.max(exportZoomStart + 0.1, Math.min(safeZoomEnd - safeTrimStartForExport, trimmedDuration));
     const inputName = `entrada-${Date.now()}.mp4`;
     const maskName = `mask-${Date.now()}.png`;
+    const borderName = `border-${Date.now()}.png`;
     const outputName = `saida-${Date.now()}.mp4`;
     const imageInputNames = imageOverlays.map(
       (overlay, index) => `midia-${Date.now()}-${index}.${getOverlayExtension(overlay.file)}`,
@@ -846,6 +895,7 @@ export function VideoEditorPanel() {
       }
 
       await ffmpeg.writeFile(maskName, await fetchFile(await createRoundedMaskBlob(zoomOutputWidth, zoomOutputHeight, ZOOM_INSET_RADIUS)));
+      await ffmpeg.writeFile(borderName, await fetchFile(await createRoundedBorderBlob(zoomOutputWidth, zoomOutputHeight, ZOOM_INSET_RADIUS, 4)));
       for (let index = 0; index < imageOverlays.length; index += 1) {
         await ffmpeg.writeFile(imageInputNames[index], await fetchFile(imageOverlays[index].file));
       }
@@ -854,27 +904,31 @@ export function VideoEditorPanel() {
 
       const filterSteps = [
         "[0:v]setpts=PTS-STARTPTS,split=2[base][zoomsrc]",
-        `[zoomsrc]crop=iw*${ZOOM_CROP_WIDTH}:ih*${ZOOM_CROP_HEIGHT},scale=${zoomOutputWidth}:${zoomOutputHeight}[zoombase]`,
+        `[zoomsrc]crop=iw*${ZOOM_CROP_WIDTH}:ih*${ZOOM_CROP_HEIGHT}:(iw*(1-${ZOOM_CROP_WIDTH}))/2:(ih*(1-${ZOOM_CROP_HEIGHT}))/2,scale=${zoomOutputWidth}:${zoomOutputHeight}[zoombase]`,
         "[1:v]format=gray[mask]",
         "[zoombase][mask]alphamerge[zoom]",
         `[base][zoom]overlay=W-w-${ZOOM_INSET_OFFSET_X}:H-h-${ZOOM_INSET_OFFSET_Y}:enable='between(t,${exportZoomStart.toFixed(2)},${exportZoomEnd.toFixed(2)})'[v0]`,
+        `[v0][2:v]overlay=W-w-${ZOOM_INSET_OFFSET_X}:H-h-${ZOOM_INSET_OFFSET_Y}:enable='between(t,${exportZoomStart.toFixed(2)},${exportZoomEnd.toFixed(2)})'[v1]`,
       ];
 
-      let lastVideoLabel = "v0";
+      let lastVideoLabel = "v1";
 
       imageOverlays.forEach((overlay, index) => {
-        const inputIndex = index + 2;
+        const inputIndex = index + 3;
         const imageLabel = `img${index}`;
-        const outputLabel = `v${index + 1}`;
+        const outputLabel = `v${index + 2}`;
 
         const imageWidthPx = Math.max(2, Math.round(((videoWidth * overlay.width) / 100) / 2) * 2);
-        const imageX = Math.round((videoWidth * overlay.x) / 100);
-        const imageY = Math.round((videoHeight * overlay.y) / 100);
+        const imageHeightPx = overlay.naturalWidth > 0
+          ? Math.max(2, Math.round(((imageWidthPx * overlay.naturalHeight) / overlay.naturalWidth) / 2) * 2)
+          : Math.max(2, Math.round(((videoHeight * overlay.width) / 100) / 2) * 2);
+        const imageX = Math.round((videoWidth * overlay.x) / 100 - imageWidthPx / 2);
+        const imageY = Math.round((videoHeight * overlay.y) / 100 - imageHeightPx / 2);
 
         const imageStart = clampNumber(overlay.start - safeTrimStartForExport, 0, trimmedDuration);
         const imageEnd = clampNumber(overlay.end - safeTrimStartForExport, imageStart + 0.1, trimmedDuration);
 
-        filterSteps.push(`[${inputIndex}:v]setpts=PTS-STARTPTS,scale=${imageWidthPx}:-1,format=rgba[${imageLabel}]`);
+        filterSteps.push(`[${inputIndex}:v]setpts=PTS-STARTPTS,scale=${imageWidthPx}:${imageHeightPx},format=rgba[${imageLabel}]`);
         filterSteps.push(
           `[${lastVideoLabel}][${imageLabel}]overlay=${imageX}:${imageY}:enable='between(t,${imageStart.toFixed(2)},${imageEnd.toFixed(2)})'[${outputLabel}]`,
         );
@@ -894,6 +948,8 @@ export function VideoEditorPanel() {
         return ["-loop", "1", "-i", inputName];
       });
 
+      const borderInputArgs = ["-loop", "1", "-i", borderName];
+
       const exitCode = await ffmpeg.exec([
         "-ss",
         safeTrimStartForExport.toFixed(2),
@@ -903,6 +959,7 @@ export function VideoEditorPanel() {
         inputName,
         "-i",
         maskName,
+        ...borderInputArgs,
         ...imageInputArgs,
         "-filter_complex",
         filterComplex,
@@ -949,12 +1006,22 @@ export function VideoEditorPanel() {
 
       await ffmpeg.deleteFile(inputName);
       await ffmpeg.deleteFile(maskName);
+      await ffmpeg.deleteFile(borderName);
       await ffmpeg.deleteFile(outputName);
       for (const imageInputName of imageInputNames) {
         await ffmpeg.deleteFile(imageInputName);
       }
-    } catch {
-      setStatus("Nao foi possivel exportar o video. Tente um MP4 menor ou recarregue a pagina.");
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const ffmpegMessage = lastFfmpegLogRef.current.trim();
+
+      console.error("Exportacao falhou", { error, ffmpegMessage });
+
+      setStatus(
+        ffmpegMessage
+          ? `Exportacao falhou: ${ffmpegMessage}`
+          : `Nao foi possivel exportar o video: ${errorMessage}. Tente um MP4 menor ou recarregue a pagina.`,
+      );
     } finally {
       setProcessing(false);
     }
@@ -1094,7 +1161,7 @@ export function VideoEditorPanel() {
                     opacity: previewZoomActive ? 1 : 0,
                     transition: "opacity 180ms ease",
                   }}
-                  className="pointer-events-none absolute overflow-hidden border border-white/20 bg-black/75 shadow-[0_18px_40px_rgba(0,0,0,.45)]"
+                  className="pointer-events-none absolute overflow-hidden border border-black/20 bg-black/75 drop-shadow-lg"
                 >
                   <video
                     src={sourceUrl}
