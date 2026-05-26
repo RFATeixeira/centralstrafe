@@ -1,10 +1,13 @@
-"use client";
+﻿"use client";
 import NextImage from "next/image";
 import { PlusIcon, MinusIcon } from "@heroicons/react/24/solid";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc } from "firebase/firestore";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuthSession } from "@/components/auth-provider";
+import { db } from "@/lib/firebase";
 
 
 const CORE_VERSION = "0.12.9";
@@ -23,8 +26,9 @@ type OverlayKind = "image" | "gif" | "video";
 
 type MediaOverlay = {
   id: string;
-  file: File;
+  file: File | null;
   url: string;
+  assetUrl: string;
   kind: OverlayKind;
   start: number;
   end: number;
@@ -33,6 +37,26 @@ type MediaOverlay = {
   width: number;
   naturalWidth: number;
   naturalHeight: number;
+};
+
+type SavedOverlayPreset = {
+  kind: OverlayKind;
+  assetUrl: string;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  width: number;
+  naturalWidth: number;
+  naturalHeight: number;
+};
+
+type VideoPreset = {
+  id: string;
+  name: string;
+  overlays: SavedOverlayPreset[];
+  createdAt?: unknown;
+  updatedAt?: unknown;
 };
 
 function getOverlayKind(file: File): OverlayKind {
@@ -91,6 +115,72 @@ async function readMediaDimensions(file: File) {
   }
 }
 
+async function fileToDataUrl(file: File) {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("Nao foi possivel ler a midia."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function blobToDataUrl(blob: Blob) {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("Nao foi possivel ler o blob."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function loadImageFromDataUrl(dataUrl: string) {
+  return await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Nao foi possivel carregar a imagem para compressao."));
+    image.src = dataUrl;
+  });
+}
+
+async function resizeImageDataUrl(dataUrl: string, maxSide = 512) {
+  if (dataUrl.startsWith("data:image/gif")) {
+    return dataUrl;
+  }
+
+  const image = await loadImageFromDataUrl(dataUrl);
+  const biggestSide = Math.max(image.naturalWidth, image.naturalHeight);
+
+  if (!biggestSide || biggestSide <= maxSide) {
+    return dataUrl;
+  }
+
+  const scale = maxSide / biggestSide;
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return dataUrl;
+  }
+
+  context.clearRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+
+  try {
+    return canvas.toDataURL("image/webp", 0.88);
+  } catch {
+    return canvas.toDataURL("image/png");
+  }
+}
+
 function formatSeconds(totalSeconds: number) {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {
     return "0:00";
@@ -108,25 +198,24 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max));
 }
 
-function getOverlayExtension(file: File) {
-  const extension = file.name.split(".").pop()?.toLowerCase();
-
-  if (extension && ["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm", "mov", "mkv", "avi"].includes(extension)) {
-    return extension;
-  }
-
-  if (file.type.startsWith("video/")) {
-    return "mp4";
-  }
-
-  if (file.type === "image/gif") {
+function getOverlayExtension(kind: OverlayKind) {
+  if (kind === "gif") {
     return "gif";
+  }
+
+  if (kind === "video") {
+    return "mp4";
   }
 
   return "png";
 }
 
+function shouldRevokeObjectUrl(url: string) {
+  return url.startsWith("blob:");
+}
+
 export function VideoEditorPanel() {
+  const { user } = useAuthSession();
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
   const [outputUrl, setOutputUrl] = useState("");
@@ -139,10 +228,14 @@ export function VideoEditorPanel() {
   const [zoomStart, setZoomStart] = useState(0);
   const [zoomEnd, setZoomEnd] = useState(0);
   const [imageOverlays, setImageOverlays] = useState<MediaOverlay[]>([]);
+  const [presetName, setPresetName] = useState("");
+  const [videoPresets, setVideoPresets] = useState<VideoPreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState("");
   const [previewTime, setPreviewTime] = useState(0);
   const [status, setStatus] = useState("Envie um MP4 para iniciar a edição.");
   const [progress, setProgress] = useState<number | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [presetSaving, setPresetSaving] = useState(false);
 
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const loadPromiseRef = useRef<Promise<FFmpeg> | null>(null);
@@ -156,6 +249,30 @@ export function VideoEditorPanel() {
   const zoomTrackRef = useRef<HTMLDivElement | null>(null);
   const activeZoomHandleRef = useRef<"start" | "end" | null>(null);
   const activeTrimHandleRef = useRef<"start" | "end" | null>(null);
+
+  useEffect(() => {
+    if (!db || !user) {
+      setVideoPresets([]);
+      setSelectedPresetId("");
+      return;
+    }
+
+    const presetsQuery = query(
+      collection(db, "users", user.uid, "videoPresets"),
+      orderBy("updatedAt", "desc"),
+    );
+
+    const unsubscribe = onSnapshot(presetsQuery, (snapshot) => {
+      setVideoPresets(
+        snapshot.docs.map((presetDoc) => ({
+          id: presetDoc.id,
+          ...(presetDoc.data() as Omit<VideoPreset, "id">),
+        })),
+      );
+    });
+
+    return () => unsubscribe();
+  }, [user]);
 
   const zoomOutputWidth = useMemo(() => {
     if (!videoWidth) {
@@ -319,6 +436,7 @@ export function VideoEditorPanel() {
     }
 
     clearImageOverlays();
+    setSelectedPresetId("");
 
     setSourceFile(null);
     setSourceUrl("");
@@ -347,7 +465,11 @@ export function VideoEditorPanel() {
 
   const clearImageOverlays = () => {
     setImageOverlays((currentOverlays) => {
-      currentOverlays.forEach((overlay) => URL.revokeObjectURL(overlay.url));
+      currentOverlays.forEach((overlay) => {
+        if (shouldRevokeObjectUrl(overlay.url)) {
+          URL.revokeObjectURL(overlay.url);
+        }
+      });
       return [];
     });
   };
@@ -361,11 +483,13 @@ export function VideoEditorPanel() {
       files.map(async (file, index) => {
         const dimensions = await readMediaDimensions(file);
         const kind = getOverlayKind(file);
+        const assetUrl = await fileToDataUrl(file);
 
         return {
           id: `${Date.now()}-${index}-${file.name}`,
           file,
           url: URL.createObjectURL(file),
+          assetUrl,
           kind,
           start: safeTrimStart,
           end: safeTrimEnd,
@@ -486,7 +610,7 @@ export function VideoEditorPanel() {
     setImageOverlays((currentOverlays) => {
       const overlayToRemove = currentOverlays.find((overlay) => overlay.id === id);
 
-      if (overlayToRemove) {
+      if (overlayToRemove && shouldRevokeObjectUrl(overlayToRemove.url)) {
         URL.revokeObjectURL(overlayToRemove.url);
       }
 
@@ -881,9 +1005,7 @@ export function VideoEditorPanel() {
     const maskName = `mask-${Date.now()}.png`;
     const borderName = `border-${Date.now()}.png`;
     const outputName = `saida-${Date.now()}.mp4`;
-    const imageInputNames = imageOverlays.map(
-      (overlay, index) => `midia-${Date.now()}-${index}.${getOverlayExtension(overlay.file)}`,
-    );
+    const imageInputNames = imageOverlays.map((overlay, index) => `midia-${Date.now()}-${index}.${getOverlayExtension(overlay.kind)}`);
 
     try {
       const ffmpeg = await ensureFFmpeg();
@@ -897,7 +1019,8 @@ export function VideoEditorPanel() {
       await ffmpeg.writeFile(maskName, await fetchFile(await createRoundedMaskBlob(zoomOutputWidth, zoomOutputHeight, ZOOM_INSET_RADIUS)));
       await ffmpeg.writeFile(borderName, await fetchFile(await createRoundedBorderBlob(zoomOutputWidth, zoomOutputHeight, ZOOM_INSET_RADIUS, 4)));
       for (let index = 0; index < imageOverlays.length; index += 1) {
-        await ffmpeg.writeFile(imageInputNames[index], await fetchFile(imageOverlays[index].file));
+        const overlaySource = imageOverlays[index].assetUrl || imageOverlays[index].url;
+        await ffmpeg.writeFile(imageInputNames[index], await fetchFile(overlaySource));
       }
 
       setStatus("Cortando o video e aplicando zoom no canto inferior direito...");
@@ -1027,6 +1150,162 @@ export function VideoEditorPanel() {
     }
   };
 
+  const prepareOverlaysToSave = async () => {
+    const overlays: SavedOverlayPreset[] = [];
+
+    for (const overlay of imageOverlays) {
+      if (overlay.kind === "video") {
+        continue;
+      }
+
+      let assetUrl = overlay.assetUrl || "";
+
+      if (!assetUrl) {
+        try {
+          if (overlay.file) {
+            assetUrl = await fileToDataUrl(overlay.file);
+          } else if (overlay.url && !overlay.url.startsWith("blob:")) {
+            // try fetching remote url and convert to data url (may fail due to CORS)
+            const fetched = await fetch(overlay.url).then((r) => r.blob());
+            assetUrl = await blobToDataUrl(fetched);
+          } else if (overlay.url && overlay.url.startsWith("blob:")) {
+            // blob URLs created in this session should have assetUrl already, but
+            // as a fallback we try to fetch and convert via Fetch API
+            try {
+              const fetched = await fetch(overlay.url).then((r) => r.blob());
+              assetUrl = await blobToDataUrl(fetched);
+            } catch {
+              // ignore — we'll fallback to using the blob URL (not ideal for persistence)
+              assetUrl = overlay.url;
+            }
+          }
+        } catch {
+          // if conversion fails, fall back to existing url (may be blob: or http)
+          assetUrl = overlay.assetUrl || overlay.url;
+        }
+      }
+
+      if (overlay.kind === "image") {
+        assetUrl = await resizeImageDataUrl(assetUrl, 512);
+      }
+
+      overlays.push({
+        kind: overlay.kind,
+        assetUrl,
+        start: overlay.start,
+        end: overlay.end,
+        x: overlay.x,
+        y: overlay.y,
+        width: overlay.width,
+        naturalWidth: overlay.naturalWidth,
+        naturalHeight: overlay.naturalHeight,
+      });
+    }
+
+    return overlays;
+  };
+
+  const loadPreset = (preset: VideoPreset) => {
+    clearImageOverlays();
+
+    const restoredOverlays = preset.overlays.map((overlay, index) => ({
+      id: `${preset.id}-${index}`,
+      file: null,
+      url: overlay.assetUrl,
+      assetUrl: overlay.assetUrl,
+      kind: overlay.kind,
+      start: overlay.start,
+      end: overlay.end,
+      x: overlay.x,
+      y: overlay.y,
+      width: overlay.width,
+      naturalWidth: overlay.naturalWidth,
+      naturalHeight: overlay.naturalHeight,
+    } satisfies MediaOverlay));
+
+    setImageOverlays(restoredOverlays);
+    setPresetName(preset.name);
+    setSelectedPresetId(preset.id);
+    setStatus(`Preset "${preset.name}" carregado.`);
+  };
+
+  const savePreset = async () => {
+    if (!db || !user) {
+      setStatus("Faça login para salvar presets no seu Firebase.");
+      return;
+    }
+
+    const overlaysToSave = await prepareOverlaysToSave();
+    const payloadSize = JSON.stringify({ name: presetName.trim() || "Preset de imagens", overlays: overlaysToSave }).length;
+
+    if (!overlaysToSave.length) {
+      setStatus("Adicione imagens ou GIFs para salvar um preset.");
+      return;
+    }
+
+    if (payloadSize > 900_000) {
+      setStatus("O preset ficou grande demais para o Firestore. Use imagens menores ou menos overlays.");
+      return;
+    }
+
+    const presetLabel = presetName.trim() || "Preset de imagens";
+    const presetDocRef = selectedPresetId
+      ? doc(db, "users", user.uid, "videoPresets", selectedPresetId)
+      : doc(collection(db, "users", user.uid, "videoPresets"));
+
+    setPresetSaving(true);
+
+    try {
+      const existingPreset = videoPresets.find((preset) => preset.id === selectedPresetId);
+
+      console.debug("Salvando preset", { presetLabel, overlaysCount: overlaysToSave.length, presetId: presetDocRef.id });
+
+      await setDoc(
+        presetDocRef,
+        {
+          name: presetLabel,
+          overlays: overlaysToSave,
+          updatedAt: serverTimestamp(),
+          ...(existingPreset ? {} : { createdAt: serverTimestamp() }),
+        },
+        { merge: true },
+      );
+
+      console.info("Preset salvo com sucesso", { presetId: presetDocRef.id });
+      setSelectedPresetId(presetDocRef.id);
+      setStatus(`Preset "${presetLabel}" salvo no seu Firebase (id: ${presetDocRef.id}).`);
+    } catch (error) {
+      const errorMessage = error instanceof Error
+        ? error.message
+        : typeof error === "object" && error
+          ? JSON.stringify(error)
+          : String(error);
+      console.error("Erro ao salvar preset", {
+        error,
+        name: error instanceof Error ? error.name : undefined,
+        code: typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : undefined,
+        message: error instanceof Error ? error.message : undefined,
+        payloadSize,
+      });
+      setStatus(`Nao foi possivel salvar o preset: ${errorMessage}`);
+    } finally {
+      setPresetSaving(false);
+    }
+  };
+
+  const deletePreset = async (presetId: string) => {
+    if (!db || !user) {
+      return;
+    }
+
+    await deleteDoc(doc(db, "users", user.uid, "videoPresets", presetId));
+
+    if (selectedPresetId === presetId) {
+      setSelectedPresetId("");
+      setPresetName("");
+    }
+  };
+
   return (
     <section className="rounded-3xl border border-slate-700/70 bg-slate-950/75 p-6 shadow-[0_20px_60px_rgba(0,0,0,.35)] md:p-8">
       <div className="flex flex-col gap-3 border-b border-slate-700/80 pb-5">
@@ -1040,6 +1319,106 @@ export function VideoEditorPanel() {
           Envie um MP4, escolha o tempo em que o zoom deve entrar, o tempo total que o video deve ter e exporte.
         </p>
       </div>
+
+      {sourceUrl && (
+        <div className="mt-6 rounded-3xl border border-slate-700 bg-slate-900/80 p-4 md:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm uppercase tracking-[0.16em] text-orange-300">Prévia ao vivo</p>
+            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+              {videoWidth && videoHeight ? `${videoWidth}x${videoHeight}` : "Aguardando metadados"}
+            </span>
+          </div>
+
+          <div
+            className="relative overflow-hidden rounded-2xl border border-slate-700 bg-black"
+            style={{
+              aspectRatio: videoWidth && videoHeight ? `${videoWidth} / ${videoHeight}` : "16 / 9",
+            }}
+          >
+            {visibleImageOverlays.map((overlay) => {
+              const dispWidth = videoWidth
+                ? Math.max(2, Math.round((videoWidth * overlay.width) / 100))
+                : Math.max(2, Math.round((overlay.naturalWidth * overlay.width) / 100)) || overlay.naturalWidth;
+
+              const dispHeight = overlay.naturalWidth > 0
+                ? Math.max(2, Math.round((dispWidth * overlay.naturalHeight) / overlay.naturalWidth))
+                : overlay.naturalHeight;
+
+              if (overlay.kind === "video") {
+                return (
+                  <video
+                    key={overlay.id}
+                    src={overlay.url}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    preload="metadata"
+                    className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 object-contain"
+                    style={{
+                      left: `${overlay.x}%`,
+                      top: `${overlay.y}%`,
+                      width: `${overlay.width}%`,
+                      height: "auto",
+                    }}
+                  />
+                );
+              }
+
+              return (
+                <NextImage
+                  key={overlay.id}
+                  src={overlay.url}
+                  alt="Imagem adicionada"
+                  width={dispWidth}
+                  height={dispHeight}
+                  unoptimized
+                  draggable={false}
+                  className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 object-contain"
+                  style={{
+                    left: `${overlay.x}%`,
+                    top: `${overlay.y}%`,
+                    width: `${overlay.width}%`,
+                    height: "auto",
+                  }}
+                />
+              );
+            })}
+
+            <video
+              src={sourceUrl}
+              ref={previewMainVideoRef}
+              controls
+              playsInline
+              onPlay={handleMainPreviewPlay}
+              onPause={syncPreviewVideo}
+              onSeeked={handleMainPreviewSeeked}
+              onTimeUpdate={handleMainPreviewTimeUpdate}
+              onLoadedMetadata={handleMainPreviewLoadedMetadata}
+              className="h-full w-full object-contain"
+            />
+
+            <div
+              style={{
+                ...previewInsetStyle,
+                opacity: previewZoomActive ? 1 : 0,
+                transition: "opacity 180ms ease",
+              }}
+              className="pointer-events-none absolute overflow-hidden border border-black/20 bg-black/75 drop-shadow-lg"
+            >
+              <video
+                src={sourceUrl}
+                ref={previewInsetVideoRef}
+                controls={false}
+                playsInline
+                muted
+                style={previewInsetVideoStyle}
+                className="h-full w-full object-cover object-center"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
         <div className="space-y-5">
@@ -1072,111 +1451,6 @@ export function VideoEditorPanel() {
               </div>
             </div>
           )}
-
-
-
-          {sourceUrl && (
-            <div className="rounded-3xl border border-slate-700 bg-slate-900/80 p-4 md:p-5">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm uppercase tracking-[0.16em] text-orange-300">Prévia ao vivo</p>
-
-                </div>
-                <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
-                  {videoWidth && videoHeight ? `${videoWidth}x${videoHeight}` : "Aguardando metadados"}
-                </span>
-              </div>
-
-              <div
-                className="relative overflow-hidden rounded-2xl border border-slate-700 bg-black"
-                style={{
-                  aspectRatio: videoWidth && videoHeight ? `${videoWidth} / ${videoHeight}` : "16 / 9",
-                }}
-              >
-                {visibleImageOverlays.map((overlay) => {
-                  const dispWidth = videoWidth
-                    ? Math.max(2, Math.round((videoWidth * overlay.width) / 100))
-                    : Math.max(2, Math.round((overlay.naturalWidth * overlay.width) / 100)) || overlay.naturalWidth;
-
-                  const dispHeight = overlay.naturalWidth > 0
-                    ? Math.max(2, Math.round((dispWidth * overlay.naturalHeight) / overlay.naturalWidth))
-                    : overlay.naturalHeight;
-
-                  if (overlay.kind === "video") {
-                    return (
-                      <video
-                        key={overlay.id}
-                        src={overlay.url}
-                        autoPlay
-                        loop
-                        muted
-                        playsInline
-                        preload="metadata"
-                        className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 object-contain"
-                        style={{
-                          left: `${overlay.x}%`,
-                          top: `${overlay.y}%`,
-                          width: `${overlay.width}%`,
-                          height: "auto",
-                        }}
-                      />
-                    );
-                  }
-
-                  return (
-                    <NextImage
-                      key={overlay.id}
-                      src={overlay.url}
-                      alt="Imagem adicionada"
-                      width={dispWidth}
-                      height={dispHeight}
-                      unoptimized
-                      draggable={false}
-                      className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 object-contain"
-                      style={{
-                        left: `${overlay.x}%`,
-                        top: `${overlay.y}%`,
-                        width: `${overlay.width}%`,
-                        height: "auto",
-                      }}
-                    />
-                  );
-                })}
-                <video
-                  src={sourceUrl}
-                  ref={previewMainVideoRef}
-                  controls
-                  playsInline
-                  onPlay={handleMainPreviewPlay}
-                  onPause={syncPreviewVideo}
-                  onSeeked={handleMainPreviewSeeked}
-                  onTimeUpdate={handleMainPreviewTimeUpdate}
-                  onLoadedMetadata={handleMainPreviewLoadedMetadata}
-                  className="h-full w-full object-contain"
-                />
-
-                <div
-                  style={{
-                    ...previewInsetStyle,
-                    opacity: previewZoomActive ? 1 : 0,
-                    transition: "opacity 180ms ease",
-                  }}
-                  className="pointer-events-none absolute overflow-hidden border border-black/20 bg-black/75 drop-shadow-lg"
-                >
-                  <video
-                    src={sourceUrl}
-                    ref={previewInsetVideoRef}
-                    controls={false}
-                    playsInline
-                    muted
-                    style={previewInsetVideoStyle}
-                    className="h-full w-full object-cover object-center"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
           <div className="rounded-3xl border border-slate-700 bg-slate-900/80 p-5">
             <div className="flex flex-wrap gap-3">
               {imageOverlays.length > 0 && (
@@ -1418,6 +1692,96 @@ export function VideoEditorPanel() {
                   <span>Adicionar mídia</span>
                 </button>
               </div>
+            </div>
+
+            <div className="mt-5 rounded-3xl border border-slate-700 bg-slate-950/70 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm uppercase tracking-[0.16em] text-orange-300">Presets</p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Salve imagens, GIFs e posições no seu Firebase pessoal.
+                  </p>
+                </div>
+                <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+                  {videoPresets.length} salvos
+                </span>
+              </div>
+
+              {user ? (
+                <div className="mt-4 space-y-4">
+                  <label className="block space-y-2 text-sm text-slate-300">
+                    <span>Nome do preset</span>
+                    <input
+                      type="text"
+                      value={presetName}
+                      onChange={(event) => setPresetName(event.target.value)}
+                      placeholder="Ex: Mirage A smoke"
+                      className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
+                    />
+                  </label>
+
+                  <label className="block space-y-2 text-sm text-slate-300">
+                    <span>Carregar preset</span>
+                    <select
+                      value={selectedPresetId}
+                      onChange={(event) => {
+                        const nextPresetId = event.target.value;
+
+                        if (!nextPresetId) {
+                          setSelectedPresetId("");
+                          setPresetName("");
+                          clearImageOverlays();
+                          return;
+                        }
+
+                        const nextPreset = videoPresets.find((preset) => preset.id === nextPresetId);
+
+                        if (nextPreset) {
+                          loadPreset(nextPreset);
+                        }
+                      }}
+                      className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
+                    >
+                      <option value="">Novo preset</option>
+                      {videoPresets.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => void savePreset()}
+                      disabled={presetSaving || !imageOverlays.some((overlay) => overlay.kind !== "video")}
+                      className="rounded-xl border border-orange-300/40 bg-orange-400 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {presetSaving ? "Salvando..." : selectedPresetId ? "Atualizar preset" : "Salvar preset"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!selectedPresetId) {
+                          return;
+                        }
+
+                        void deletePreset(selectedPresetId);
+                      }}
+                      disabled={!selectedPresetId}
+                      className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-200 transition hover:border-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Excluir preset
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 text-sm leading-6 text-slate-400">
+                  Faça login para salvar e reutilizar seus presets no Firestore do seu usuário.
+                </p>
+              )}
             </div>
           </div>
         </div>

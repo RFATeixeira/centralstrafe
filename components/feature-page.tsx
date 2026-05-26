@@ -11,7 +11,8 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase";
 import { isCommentModerator, isFeatureManager } from "@/lib/roles";
 import { useAuthSession } from "@/components/auth-provider";
@@ -713,6 +714,9 @@ export function FeaturePage({
   initialMapFilter = "",
 }: FeaturePageProps) {
   const { user, profile, role } = useAuthSession();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const copy = categoryCopy[category];
   const [features, setFeatures] = useState<FeatureItem[]>([]);
   const [comments, setComments] = useState<FeatureComment[]>([]);
@@ -744,10 +748,26 @@ export function FeaturePage({
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [selectedMapFocus, setSelectedMapFocus] = useState<GrenadeMapFocus | null>(null);
   const [mapSelectionMode, setMapSelectionMode] = useState<"launch" | "impact">("launch");
+  const selectedMapSectionRef = useRef<HTMLElement | null>(null);
 
   const canAddFeature = isFeatureManager(role);
   const canModerateComments = isCommentModerator(role);
   const isGranadasCategory = category === "granadas";
+  const mapFilterFromUrl = searchParams.get("map")?.trim() ?? initialMapFilter.trim();
+
+  const syncMapFilterToUrl = (nextMap: string) => {
+    const nextValue = nextMap.trim();
+    const params = new URLSearchParams(searchParams.toString());
+
+    if (nextValue) {
+      params.set("map", nextValue);
+    } else {
+      params.delete("map");
+    }
+
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  };
 
   useEffect(() => {
     if (!db) {
@@ -843,6 +863,26 @@ export function FeaturePage({
       setFilterLocation("");
     }
   }, [availableImpactLocations, filterLocation]);
+
+  useEffect(() => {
+    setFilterMap(mapFilterFromUrl);
+  }, [mapFilterFromUrl]);
+
+  useEffect(() => {
+    if (initialMapFilter.trim()) {
+      setFilterMap(initialMapFilter);
+    }
+  }, [initialMapFilter]);
+
+  useEffect(() => {
+    if (!initialMapFilter.trim()) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      selectedMapSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [initialMapFilter]);
 
   useEffect(() => {
     setSelectedMapFocus(null);
@@ -1461,7 +1501,7 @@ export function FeaturePage({
                 type="button"
                 onClick={() => {
                   setFilterGrenadeType("");
-                  setFilterMap("");
+                  syncMapFilterToUrl("");
                   setFilterObjective("");
                   setFilterDifficulty("");
                   setFilterThrowType("");
@@ -1493,7 +1533,7 @@ export function FeaturePage({
                         <button
                           key={option.value}
                           type="button"
-                          onClick={() => setFilterMap(active ? "" : option.value)}
+                          onClick={() => syncMapFilterToUrl(active ? "" : option.value)}
                           className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold transition ${
                             active
                               ? "border-orange-300 bg-orange-300/15 text-orange-100"
@@ -1692,7 +1732,10 @@ export function FeaturePage({
 
           <div>
             {isGranadasCategory && (
-              <section className="mb-6 rounded-3xl border border-slate-700/70 bg-slate-950/75 p-4 shadow-[0_18px_40px_rgba(0,0,0,.28)] md:p-5">
+              <section
+                ref={selectedMapSectionRef}
+                className="mb-6 rounded-3xl border border-slate-700/70 bg-slate-950/75 p-4 shadow-[0_18px_40px_rgba(0,0,0,.28)] md:p-5"
+              >
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                   <div>
                     <p className="text-xs uppercase tracking-[0.16em] text-orange-300">Mapa tatico</p>
@@ -2367,7 +2410,16 @@ export function FeaturePage({
                     </div>
 
                     <div>
-                      <p className="text-sm text-slate-300 md:text-base">{feature.description}</p>
+                      {isGranadasCategory ? (
+                        <div className="rounded-xl border border-slate-700 bg-slate-950/70 p-4 text-sm text-slate-300 md:text-base">
+                          <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Tipo de lançamento</p>
+                          <p className="mt-2 font-semibold text-white">
+                            {feature.throwType ? feature.throwType : "Não informado"}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-300 md:text-base">{feature.description}</p>
+                      )}
 
                       {feature.teleportCommand && (
                         <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
@@ -2934,18 +2986,20 @@ export function FeaturePage({
                 </div>
               )}
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-2 text-sm text-slate-300 md:col-span-2">
-                  <span>Descrição</span>
-                  <textarea
-                    className="min-h-32 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
-                    value={featureForm.description}
-                    onChange={(event) =>
-                      setFeatureForm((current) => ({ ...current, description: event.target.value }))
-                    }
-                  />
-                </label>
-              </div>
+              {!isGranadasCategory && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="space-y-2 text-sm text-slate-300 md:col-span-2">
+                    <span>Descrição</span>
+                    <textarea
+                      className="min-h-32 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-orange-300"
+                      value={featureForm.description}
+                      onChange={(event) =>
+                        setFeatureForm((current) => ({ ...current, description: event.target.value }))
+                      }
+                    />
+                  </label>
+                </div>
+              )}
 
               <label className="space-y-2 text-sm text-slate-300">
                 <span>Link do video do YouTube</span>
