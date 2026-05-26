@@ -63,6 +63,7 @@ type FeaturePageProps = {
   intro: string;
   points: string[];
   showHero?: boolean;
+  initialMapFilter?: string;
 };
 
 type GrenadeMapFocus = {
@@ -192,15 +193,20 @@ function pickFirstNonEmptyText(...values: Array<string | null | undefined>) {
 function getYouTubeEmbedUrl(url: string) {
   try {
     const parsedUrl = new URL(url);
+    const videoId = parsedUrl.hostname.includes("youtu.be")
+      ? parsedUrl.pathname.replace("/", "")
+      : parsedUrl.hostname.includes("youtube.com")
+        ? parsedUrl.searchParams.get("v")
+        : "";
 
-    if (parsedUrl.hostname.includes("youtu.be")) {
-      const videoId = parsedUrl.pathname.replace("/", "");
-      return videoId ? `https://www.youtube.com/embed/${videoId}` : "";
-    }
+    if (videoId) {
+      const params = new URLSearchParams({
+        autoplay: "1",
+        playsinline: "1",
+        enablejsapi: "1",
+      });
 
-    if (parsedUrl.hostname.includes("youtube.com")) {
-      const videoId = parsedUrl.searchParams.get("v");
-      return videoId ? `https://www.youtube.com/embed/${videoId}` : "";
+      return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
     }
   } catch {
     return "";
@@ -249,9 +255,6 @@ function getYouTubeHoverPreviewUrl(url: string) {
   const params = new URLSearchParams({
     autoplay: "1",
     mute: "1",
-    controls: "0",
-    rel: "0",
-    modestbranding: "1",
     loop: "1",
     playlist: videoId,
     playsinline: "1",
@@ -366,40 +369,40 @@ function getFeatureTitleSizeClass(title: string, compact = false) {
 }
 
 const grenadeIconByKey: Record<string, string> = {
-  smoke: "/assets/icons/grenades/smoke.png",
-  flash: "/assets/icons/grenades/flashbang.png",
-  flashbang: "/assets/icons/grenades/flashbang.png",
-  decoy: "/assets/icons/grenades/decoy.png",
-  molotov: "/assets/icons/grenades/molotov.png",
-  molly: "/assets/icons/grenades/molotov.png",
-  incendiary: "/assets/icons/grenades/molotov.png",
-  he: "/assets/icons/grenades/he.png",
-  grenade: "/assets/icons/grenades/he.png",
-  hegrenade: "/assets/icons/grenades/he.png",
-  frag: "/assets/icons/grenades/he.png",
+  smoke: "/assets/icons/grenades/smoke.svg",
+  flash: "/assets/icons/grenades/flashbang.svg",
+  flashbang: "/assets/icons/grenades/flashbang.svg",
+  decoy: "/assets/icons/grenades/decoy.svg",
+  molotov: "/assets/icons/grenades/molotov.svg",
+  molly: "/assets/icons/grenades/molotov.svg",
+  incendiary: "/assets/icons/grenades/molotov.svg",
+  he: "/assets/icons/grenades/he.svg",
+  grenade: "/assets/icons/grenades/he.svg",
+  hegrenade: "/assets/icons/grenades/he.svg",
+  frag: "/assets/icons/grenades/he.svg",
 };
 
 const mapIconByKey: Record<string, string> = {
-  ancient: "/assets/icons/maps/ancient.png",
-  anubis: "/assets/icons/maps/anubis.png",
-  cobblestone: "/assets/icons/maps/cobblestone.png",
-  cbble: "/assets/icons/maps/cobblestone.png",
-  dustii: "/assets/icons/maps/dustii.png",
-  dust2: "/assets/icons/maps/dustii.png",
-  "dust-2": "/assets/icons/maps/dustii.png",
-  "dust-ii": "/assets/icons/maps/dustii.png",
-  inferno: "/assets/icons/maps/inferno.png",
-  mirage: "/assets/icons/maps/mirage.png",
-  nuke: "/assets/icons/maps/nuke.png",
-  overpass: "/assets/icons/maps/overpass.png",
-  train: "/assets/icons/maps/train.png",
-  vertigo: "/assets/icons/maps/vertigo.png",
+  ancient: "/assets/icons/maps/svg/map_icon_de_ancient.svg",
+  anubis: "/assets/icons/maps/svg/map_icon_de_anubis.svg",
+  cache: "/assets/icons/maps/svg/map_icon_de_cache.svg",
+  dustii: "/assets/icons/maps/svg/map_icon_de_dust2.svg",
+  dust2: "/assets/icons/maps/svg/map_icon_de_dust2.svg",
+  "dust-2": "/assets/icons/maps/svg/map_icon_de_dust2.svg",
+  "dust-ii": "/assets/icons/maps/svg/map_icon_de_dust2.svg",
+  inferno: "/assets/icons/maps/svg/map_icon_de_inferno.svg",
+  mirage: "/assets/icons/maps/svg/map_icon_de_mirage.svg",
+  nuke: "/assets/icons/maps/svg/map_icon_de_nuke.svg",
+  overpass: "/assets/icons/maps/svg/map_icon_de_overpass.svg",
+  train: "/assets/icons/maps/svg/map_icon_de_train.svg",
+  vertigo: "/assets/icons/maps/svg/map_icon_de_vertigo.svg",
 };
 
 const mapOverviewByKey: Record<string, string> = {
   ancient: "/assets/icons/overviews/de_ancient_radar_psd.png",
   ancientnight: "/assets/icons/overviews/de_ancient_night_radar_psd.png",
   anubis: "/assets/icons/overviews/de_anubis_radar_psd.png",
+  cache: "/assets/icons/overviews/de_cache_radar_psd.png",
   dustii: "/assets/icons/overviews/de_dust2_radar_psd.png",
   dust2: "/assets/icons/overviews/de_dust2_radar_psd.png",
   "dust-2": "/assets/icons/overviews/de_dust2_radar_psd.png",
@@ -427,6 +430,7 @@ const mapNameAliases: Record<string, string[]> = {
   "dust-2": ["dustii", "dust2", "dust-2", "dust-ii"],
   "dust-ii": ["dustii", "dust2", "dust-2", "dust-ii"],
   dustii: ["dustii", "dust2", "dust-2", "dust-ii"],
+  cache: ["cache"],
   nuke: ["nuke"],
   mirage: ["mirage"],
   inferno: ["inferno"],
@@ -435,7 +439,6 @@ const mapNameAliases: Record<string, string[]> = {
   anubis: ["anubis"],
   overpass: ["overpass"],
   train: ["train"],
-  cobblestone: ["cobblestone", "cbble"],
   cbble: ["cobblestone", "cbble"],
 };
 
@@ -444,7 +447,7 @@ const grenadeTypeOptions = ["Smoke", "Flash", "Molotov", "He", "Decoy"];
 const mapOptions = [
   { value: "Ancient", label: "Ancient" },
   { value: "Anubis", label: "Anubis" },
-  { value: "Cobblestone", label: "Cobblestone" },
+  { value: "Cache", label: "Cache" },
   { value: "Dust II", label: "Dust II" },
   { value: "Inferno", label: "Inferno" },
   { value: "Mirage", label: "Mirage" },
@@ -700,7 +703,15 @@ function IconWithFallback({ candidates, alt, className }: IconWithFallbackProps)
   );
 }
 
-export function FeaturePage({ category, badge, title, intro, points, showHero = true }: FeaturePageProps) {
+export function FeaturePage({
+  category,
+  badge,
+  title,
+  intro,
+  points,
+  showHero = true,
+  initialMapFilter = "",
+}: FeaturePageProps) {
   const { user, profile, role } = useAuthSession();
   const copy = categoryCopy[category];
   const [features, setFeatures] = useState<FeatureItem[]>([]);
@@ -709,7 +720,7 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
   const [editingFeature, setEditingFeature] = useState<FeatureItem | null>(null);
   const [featureForm, setFeatureForm] = useState<FeatureFormState>(emptyFeatureForm);
   const [filterGrenadeType, setFilterGrenadeType] = useState("");
-  const [filterMap, setFilterMap] = useState("");
+  const [filterMap, setFilterMap] = useState(initialMapFilter);
   const [filterObjective, setFilterObjective] = useState("");
   const [filterDifficulty, setFilterDifficulty] = useState("");
   const [filterThrowType, setFilterThrowType] = useState("");
@@ -1793,6 +1804,15 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                                             title={`${feature.title} preview`}
                                             allow="autoplay; encrypted-media; picture-in-picture"
                                             allowFullScreen
+                                            onLoad={(event) => {
+                                              const targetWindow = event.currentTarget.contentWindow;
+                                              sendYouTubePlaybackCommands(targetWindow, 1.5);
+                                              for (let attempt = 1; attempt <= 6; attempt += 1) {
+                                                window.setTimeout(() => {
+                                                  sendYouTubePlaybackCommands(targetWindow, 1.5);
+                                                }, attempt * 300);
+                                              }
+                                            }}
                                           />
                                         ) : selectedMapHoveredFeatureImages.length > 0 ? (
                                           <>
@@ -2230,6 +2250,15 @@ export function FeaturePage({ category, badge, title, intro, points, showHero = 
                                 title={`${feature.title} video`}
                                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                                 allowFullScreen
+                                onLoad={(event) => {
+                                  const targetWindow = event.currentTarget.contentWindow;
+                                  sendYouTubePlaybackCommands(targetWindow, 1.5);
+                                  for (let attempt = 1; attempt <= 6; attempt += 1) {
+                                    window.setTimeout(() => {
+                                      sendYouTubePlaybackCommands(targetWindow, 1.5);
+                                    }, attempt * 300);
+                                  }
+                                }}
                               />
                             )}
 

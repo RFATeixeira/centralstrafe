@@ -9,6 +9,7 @@ import { canManageRoles } from "@/lib/roles";
 
 const navItems = [
   { href: "/", label: "Inicio", disabled: false },
+  { href: "/sobre", label: "Sobre", disabled: false },
   { href: "/granadas", label: "Granadas", disabled: false },
   { href: "/movimentacoes", label: "Movimentações", disabled: true },
   { href: "/taticas", label: "Taticas", disabled: true },

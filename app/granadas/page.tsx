@@ -5,7 +5,15 @@ export const metadata: Metadata = {
   title: "Granadas",
 };
 
-export default function GranadasPage() {
+export default function GranadasPage({
+  searchParams,
+}: Readonly<{
+  searchParams?: { map?: string | string[] };
+}>) {
+  const initialMapFilter = Array.isArray(searchParams?.map)
+    ? searchParams.map[0] ?? ""
+    : searchParams?.map ?? "";
+
   return (
     <FeaturePage
       category="granadas"
@@ -19,6 +27,7 @@ export default function GranadasPage() {
         "Passo a passo visual para repetir com consistencia no servidor",
       ]}
       showHero={false}
+      initialMapFilter={initialMapFilter}
     />
   );
 }

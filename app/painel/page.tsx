@@ -2,6 +2,7 @@
 
 import { collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
+import { VideoEditorPanel } from "@/components/video-editor-panel";
 import { db } from "@/lib/firebase";
 import { canAssignRole, Role } from "@/lib/roles";
 import { useAuthSession } from "@/components/auth-provider";
@@ -76,7 +77,7 @@ export default function PainelPage() {
 
   if (!isAdmin) {
     return (
-      <main className="mx-auto w-[min(1120px,92vw)] pb-12 text-slate-100">
+      <main className="mx-auto w-full max-w-400 px-3 pb-12 text-slate-100 sm:px-4 lg:px-6">
         <section className="rounded-3xl border border-slate-700/70 bg-slate-950/70 p-6 shadow-[0_28px_65px_rgba(0,0,0,.45)]">
           <h1 className="text-3xl font-bold uppercase text-white">Painel restrito</h1>
           <p className="mt-3 text-slate-300">
@@ -88,7 +89,7 @@ export default function PainelPage() {
   }
 
   return (
-    <main className="mx-auto w-[min(1120px,92vw)] pb-12 text-slate-100">
+    <main className="mx-auto w-full max-w-400 px-3 pb-12 text-slate-100 sm:px-4 lg:px-6">
       <section className="rounded-3xl border border-slate-700/70 bg-slate-950/70 p-6 shadow-[0_28px_65px_rgba(0,0,0,.45)] md:p-10">
         <p className="mb-3 inline-flex rounded-full border border-orange-300/35 px-3 py-1 text-xs uppercase tracking-[0.14em] text-orange-300">
           Painel
@@ -107,6 +108,10 @@ export default function PainelPage() {
           </p>
         )}
       </section>
+
+      <div className="mt-6">
+        <VideoEditorPanel />
+      </div>
 
       <section className="mt-6 rounded-3xl border border-slate-700/70 bg-slate-900/75 p-5 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
