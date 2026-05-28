@@ -180,11 +180,9 @@ export default function Home() {
         <div className="relative flex flex-col p-5 md:p-4">
           <div className="my-auto grid gap-6 md:grid-cols-[1.2fr_.8fr] md:gap-8">
             <div className="flex flex-col justify-center">
-              <p className="mb-3 w-fit inline-flex rounded-full border border-orange-300/35 px-3 py-1 text-xs uppercase tracking-[0.14em] text-orange-300">
-                Mapas disponíveis
-              </p>
+              
               <h1 className="text-3xl font-bold uppercase leading-[0.98] tracking-tight text-white sm:text-4xl md:text-3xl">
-                CS to CS - Seu hub visual para treinar util por mapa
+                CS to CS - Seu hub visual para teinar cs2
               </h1>
               <div className="flex flex-wrap gap-3 mt-4">
                 <Link
@@ -227,9 +225,7 @@ export default function Home() {
             <p className="mb-2 inline-flex rounded-full border border-orange-300/35 px-3 py-1 text-xs uppercase tracking-[0.14em] text-orange-300">
               Catálogo de mapas
             </p>
-            <h2 className="text-2xl font-semibold uppercase text-white md:text-3xl">
-              Cards com screenshot, logo e contagem
-            </h2>
+            
           </div>
 
           <p className="text-sm text-slate-400">
