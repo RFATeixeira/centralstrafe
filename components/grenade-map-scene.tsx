@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, useRef, type MouseEvent } from "react";
 
 export type MapPoint = {
   x: number;
@@ -152,11 +152,27 @@ export function GrenadeMapScene({
 
   const shouldShowEditorFullView = revealMode === "editor";
   const [hoveredLaunchKey, setHoveredLaunchKey] = useState("");
+  const [clusterAnchor, setClusterAnchor] = useState<
+    { point: MapPoint; impactKey: string; launchKey: string } | null
+  >(null);
+  const hideTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
+  }, []);
   const [hoveredPreviewImageIndex, setHoveredPreviewImageIndex] = useState(0);
   const hoveredLaunchEntry = useMemo(
     () => entries.find((entry) => buildPointKey(entry.launchPoint) === hoveredLaunchKey) ?? null,
     [entries, hoveredLaunchKey]
   );
+  const hoveredPreviewTranslateClass = clusterAnchor && hoveredLaunchKey && clusterAnchor.launchKey === hoveredLaunchKey
+    ? "-translate-y-[220%]"
+    : "-translate-y-[118%]";
   const hoveredLaunchImages = useMemo(() => {
     if (!hoveredLaunchEntry) {
       return [] as string[];
@@ -391,10 +407,43 @@ export function GrenadeMapScene({
                   } ${launchButton ? "cursor-pointer" : "cursor-default"}`}
                   style={pointStyle(entry.launchPoint)}
                   onClick={() => onLaunchClick?.(entry)}
-                  onMouseEnter={() => setHoveredLaunchKey(launchKey)}
+                  onMouseEnter={() => {
+                    // cancelar timer caso exista
+                    if (hideTimerRef.current) {
+                      window.clearTimeout(hideTimerRef.current);
+                      hideTimerRef.current = null;
+                    }
+
+                    // contar apenas lançamentos que têm o mesmo ponto de lançamento (launchKey)
+                    const sameLaunchRelated = entries.filter(
+                      (e) => buildPointKey(e.impactPoint) === impactKey && buildPointKey(e.launchPoint) === launchKey
+                    );
+
+                    if (sameLaunchRelated.length > 1) {
+                      setClusterAnchor({ point: entry.launchPoint as MapPoint, impactKey, launchKey });
+                      setHoveredLaunchKey("");
+                    } else {
+                      setClusterAnchor(null);
+                      setHoveredLaunchKey(launchKey);
+                    }
+                  }}
                   onMouseLeave={() => {
-                    setHoveredLaunchKey((current) => (current === launchKey ? "" : current));
-                    setHoveredPreviewImageIndex(0);
+                    // se o cluster está ativo para este launchKey, aguardar um tempo antes de fechar
+                    if (clusterAnchor && clusterAnchor.launchKey === launchKey) {
+                      if (hideTimerRef.current) {
+                        window.clearTimeout(hideTimerRef.current);
+                      }
+
+                      hideTimerRef.current = window.setTimeout(() => {
+                        setClusterAnchor((current) => (current && current.launchKey === launchKey ? null : current));
+                        setHoveredLaunchKey((current) => (current === launchKey ? "" : current));
+                        setHoveredPreviewImageIndex(0);
+                        hideTimerRef.current = null;
+                      }, 300);
+                    } else {
+                      setHoveredLaunchKey((current) => (current === launchKey ? "" : current));
+                      setHoveredPreviewImageIndex(0);
+                    }
                   }}
                   disabled={!launchButton}
                   title={`Lançamento: ${entry.title} ${pointLabel(entry.launchPoint)}`}
@@ -452,9 +501,69 @@ export function GrenadeMapScene({
 
       </div>
 
+      {/* Quando um impacto está selecionado e possui múltiplos lançamentos,
+          exibimos um card flutuante com bolinhas representando cada lançamento */}
+      {clusterAnchor && (() => {
+        const { impactKey, launchKey } = clusterAnchor;
+        // apenas os lançamentos que compartilham o mesmo launchKey no mesmo impactKey
+        const related = entries.filter(
+          (e) => buildPointKey(e.impactPoint) === impactKey && buildPointKey(e.launchPoint) === launchKey
+        );
+        if (related.length <= 1) return null;
+
+        const anchorPoint = clusterAnchor.point;
+
+        return (
+          <div
+            className="pointer-events-auto absolute z-50 -translate-x-1/2 -translate-y-[118%]"
+            style={{ left: `${anchorPoint.x}%`, top: `${anchorPoint.y}%` }}
+            onMouseEnter={() => {
+              if (hideTimerRef.current) {
+                window.clearTimeout(hideTimerRef.current);
+                hideTimerRef.current = null;
+              }
+            }}
+            onMouseLeave={() => {
+              if (hideTimerRef.current) {
+                window.clearTimeout(hideTimerRef.current);
+              }
+
+              hideTimerRef.current = window.setTimeout(() => {
+                setClusterAnchor(null);
+                setHoveredLaunchKey("");
+                setHoveredPreviewImageIndex(0);
+                hideTimerRef.current = null;
+              }, 300);
+            }}
+          >
+            <div className="w-min overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-[0_24px_60px_rgba(0,0,0,.45)]">
+              <div className="flex gap-2 p-3">
+                {related.map((r) => {
+                  const lk = buildPointKey(r.launchPoint);
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-emerald-200 bg-white px-0.5 py-0.5 text-slate-950  transition"
+                      onMouseEnter={() => setHoveredLaunchKey(lk)}
+                      onMouseLeave={() => setHoveredLaunchKey((current) => (current === lk ? "" : current))}
+                      onClick={() => onLaunchClick?.(r)}
+                      title={r.title}
+                      aria-label={`Lançamento de ${r.title}`}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-slate-950" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {hoveredLaunchEntry && hoveredLaunchEntry.launchPoint && (
         <div
-          className="pointer-events-none absolute z-50 w-[min(72vw,18rem)] -translate-x-1/2 -translate-y-[118%] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-[0_24px_60px_rgba(0,0,0,.45)]"
+          className={`pointer-events-none absolute z-50 w-[min(72vw,18rem)] -translate-x-1/2 ${hoveredPreviewTranslateClass} overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-[0_24px_60px_rgba(0,0,0,.45)]`}
           style={{
             left: `${hoveredLaunchEntry.launchPoint.x}%`,
             top: `${hoveredLaunchEntry.launchPoint.y}%`,
@@ -536,11 +645,6 @@ export function GrenadeMapScene({
           </div>
         </div>
       )}
-
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-        <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1">Lançamento em verde</span>
-        <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1">Impacto em laranja</span>
-      </div>
     </div>
   );
 }

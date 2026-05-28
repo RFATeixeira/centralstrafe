@@ -11,7 +11,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase";
 import { isCommentModerator, isFeatureManager } from "@/lib/roles";
@@ -937,6 +937,54 @@ type IconWithFallbackProps = {
   className: string;
 };
 
+type FilterPopoverCardProps = {
+  title: string;
+  isOpen: boolean;
+  onToggle: (anchorRect: DOMRect | null) => void;
+  anchorRect: DOMRect | null;
+  children: ReactNode;
+};
+
+function FilterPopoverCard({ title, isOpen, onToggle, anchorRect, children }: FilterPopoverCardProps) {
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  return (
+    <div className="relative min-w-0 flex-1 basis-0 shrink-0 overflow-visible rounded-xl border border-slate-700 bg-slate-950/55 p-3">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => onToggle(triggerRef.current?.getBoundingClientRect() ?? null)}
+        className="flex w-full cursor-pointer list-none items-center justify-between text-left text-sm font-semibold text-slate-200"
+      >
+        <span>{title}</span>
+        <svg
+          viewBox="0 0 20 20"
+          className={`h-4 w-4 text-slate-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
+          fill="none"
+          aria-hidden="true"
+        >
+          <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {isOpen && (
+        <div
+          className="fixed z-50 rounded-xl border border-slate-700 bg-slate-950/95 p-3 shadow-[0_24px_60px_rgba(0,0,0,.45)] backdrop-blur-sm"
+          style={{
+            top: `${(anchorRect?.bottom ?? 0) + 8}px`,
+            left: `${anchorRect?.left ?? 0}px`,
+            width: `${anchorRect?.width ?? 0}px`,
+            maxHeight: "min(70vh, 32rem)",
+            overflow: "auto",
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IconWithFallback({ candidates, alt, className }: IconWithFallbackProps) {
   const uniqueCandidates = uniqueValues(candidates);
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
@@ -984,6 +1032,8 @@ export function FeaturePage({
   const [filterPosition, setFilterPosition] = useState("");
   const [expandedFeatureId, setExpandedFeatureId] = useState<string | null>(null);
   const [activeExpandedImageIndex, setActiveExpandedImageIndex] = useState(0);
+  const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
+  const [activeFilterMenuRect, setActiveFilterMenuRect] = useState<DOMRect | null>(null);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [editingComment, setEditingComment] = useState<FeatureComment | null>(null);
   const [editingCommentText, setEditingCommentText] = useState("");
@@ -997,7 +1047,6 @@ export function FeaturePage({
   const [hoveredImageIndex, setHoveredImageIndex] = useState(0);
   const [selectedMapHoveredFeatureId, setSelectedMapHoveredFeatureId] = useState<string | null>(null);
   const [selectedMapHoveredImageIndex, setSelectedMapHoveredImageIndex] = useState(0);
-  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [selectedMapFocus, setSelectedMapFocus] = useState<GrenadeMapFocus | null>(null);
   const [mapSelectionMode, setMapSelectionMode] = useState<"launch" | "impact">("launch");
   const selectedMapSectionRef = useRef<HTMLElement | null>(null);
@@ -1727,27 +1776,12 @@ export function FeaturePage({
       </div>
 
       <section className="mt-4">
-        <div className="grid items-start gap-4 lg:grid-cols-[280px_1fr]">
-          <aside className="rounded-2xl border border-slate-700 bg-slate-900/75 p-4 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-5 lg:sticky lg:top-6">
+        <div className="flex flex-col gap-4">
+          <aside className="w-full rounded-2xl border border-slate-700 bg-slate-900/75 p-4 shadow-[0_10px_20px_rgba(0,0,0,.2)] md:p-5">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-semibold uppercase tracking-[0.08em] text-slate-200">
                 Filtros
               </p>
-              <button
-                type="button"
-                onClick={() => setMobileFiltersOpen((current) => !current)}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-500 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-slate-300 lg:hidden"
-                aria-expanded={mobileFiltersOpen}
-                aria-controls="feature-filters-mobile"
-              >
-                {mobileFiltersOpen ? "Fechar" : "Abrir"}
-              </button>
-            </div>
-
-            <div
-              id="feature-filters-mobile"
-              className={`${mobileFiltersOpen ? "mt-3 grid" : "hidden"} grid-cols-1 gap-3 lg:mt-3 lg:grid`}
-            >
               <button
                 type="button"
                 onClick={() => {
@@ -1759,32 +1793,41 @@ export function FeaturePage({
                   setFilterLocation("");
                   setFilterPosition("");
                 }}
-                className="w-full rounded-lg border border-orange-300/40 bg-orange-400/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-orange-200 transition hover:bg-orange-400/20"
+                className="rounded-lg border border-orange-300/40 bg-orange-400/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-orange-200 transition hover:bg-orange-400/20"
               >
                 Limpar filtros
               </button>
+            </div>
 
+            <div id="feature-filters-mobile" className="mt-3 flex w-full flex-nowrap gap-3 overflow-x-auto pb-16">
               {isGranadasCategory && (
-                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
-                    <span>Mapa</span>
-                    <svg
-                      viewBox="0 0 20 20"
-                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
-                      fill="none"
-                      aria-hidden="true"
-                    >
-                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="mt-3 grid grid-cols-1 gap-2">
+                <FilterPopoverCard
+                  title="Mapa"
+                  isOpen={activeFilterMenu === "map"}
+                  anchorRect={activeFilterMenu === "map" ? activeFilterMenuRect : null}
+                  onToggle={(anchorRect) => {
+                    if (activeFilterMenu === "map") {
+                      setActiveFilterMenu(null);
+                      setActiveFilterMenuRect(null);
+                      return;
+                    }
+
+                    setActiveFilterMenuRect(anchorRect);
+                    setActiveFilterMenu("map");
+                  }}
+                >
+                  <div className="grid grid-cols-1 gap-2">
                     {filterOptions.maps.map((option) => {
                       const active = isSameMap(filterMap, option.value);
                       return (
                         <button
                           key={option.value}
                           type="button"
-                          onClick={() => syncMapFilterToUrl(active ? "" : option.value)}
+                          onClick={() => {
+                            syncMapFilterToUrl(active ? "" : option.value);
+                            setActiveFilterMenu(null);
+                            setActiveFilterMenuRect(null);
+                          }}
                           className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold transition ${
                             active
                               ? "border-orange-300 bg-orange-300/15 text-orange-100"
@@ -1801,31 +1844,38 @@ export function FeaturePage({
                       );
                     })}
                   </div>
-                </details>
+                </FilterPopoverCard>
               )}
 
               {isGranadasCategory && (
-                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
-                    <span>Tipo de granada</span>
-                    <svg
-                      viewBox="0 0 20 20"
-                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
-                      fill="none"
-                      aria-hidden="true"
-                    >
-                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="mt-3 grid grid-cols-1 gap-2">
+                <FilterPopoverCard
+                  title="Tipo de granada"
+                  isOpen={activeFilterMenu === "grenadeType"}
+                  anchorRect={activeFilterMenu === "grenadeType" ? activeFilterMenuRect : null}
+                  onToggle={(anchorRect) => {
+                    if (activeFilterMenu === "grenadeType") {
+                      setActiveFilterMenu(null);
+                      setActiveFilterMenuRect(null);
+                      return;
+                    }
+
+                    setActiveFilterMenuRect(anchorRect);
+                    setActiveFilterMenu("grenadeType");
+                  }}
+                >
+                  <div className="flex flex-wrap gap-2">
                     {filterOptions.grenadeTypes.map((option) => {
                       const active = canonicalGrenadeType(filterGrenadeType) === canonicalGrenadeType(option);
                       return (
                         <button
                           key={option}
                           type="button"
-                          onClick={() => setFilterGrenadeType(active ? "" : option)}
-                          className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                          onClick={() => {
+                            setFilterGrenadeType(active ? "" : option);
+                            setActiveFilterMenu(null);
+                            setActiveFilterMenuRect(null);
+                          }}
+                          className={`flex min-w-32 items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold transition ${
                             active
                               ? "border-cyan-300 bg-cyan-300/12 text-cyan-100"
                               : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
@@ -1841,30 +1891,37 @@ export function FeaturePage({
                       );
                     })}
                   </div>
-                </details>
+                </FilterPopoverCard>
               )}
 
               {isGranadasCategory && (
-                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
-                    <span>Objetivo</span>
-                    <svg
-                      viewBox="0 0 20 20"
-                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
-                      fill="none"
-                      aria-hidden="true"
-                    >
-                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                <FilterPopoverCard
+                  title="Objetivo"
+                  isOpen={activeFilterMenu === "objective"}
+                  anchorRect={activeFilterMenu === "objective" ? activeFilterMenuRect : null}
+                  onToggle={(anchorRect) => {
+                    if (activeFilterMenu === "objective") {
+                      setActiveFilterMenu(null);
+                      setActiveFilterMenuRect(null);
+                      return;
+                    }
+
+                    setActiveFilterMenuRect(anchorRect);
+                    setActiveFilterMenu("objective");
+                  }}
+                >
+                  <div className="flex flex-wrap gap-2">
                     {filterOptions.objectives.map((option) => {
                       const active = normalizeToken(filterObjective) === normalizeToken(option);
                       return (
                         <button
                           key={option}
                           type="button"
-                          onClick={() => setFilterObjective(active ? "" : option)}
+                          onClick={() => {
+                            setFilterObjective(active ? "" : option);
+                            setActiveFilterMenu(null);
+                            setActiveFilterMenuRect(null);
+                          }}
                           className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
                             active
                               ? "border-emerald-300 bg-emerald-300/15 text-emerald-100"
@@ -1876,30 +1933,37 @@ export function FeaturePage({
                       );
                     })}
                   </div>
-                </details>
+                </FilterPopoverCard>
               )}
 
               {isGranadasCategory && (
-                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
-                    <span>Dificuldade</span>
-                    <svg
-                      viewBox="0 0 20 20"
-                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
-                      fill="none"
-                      aria-hidden="true"
-                    >
-                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                <FilterPopoverCard
+                  title="Dificuldade"
+                  isOpen={activeFilterMenu === "difficulty"}
+                  anchorRect={activeFilterMenu === "difficulty" ? activeFilterMenuRect : null}
+                  onToggle={(anchorRect) => {
+                    if (activeFilterMenu === "difficulty") {
+                      setActiveFilterMenu(null);
+                      setActiveFilterMenuRect(null);
+                      return;
+                    }
+
+                    setActiveFilterMenuRect(anchorRect);
+                    setActiveFilterMenu("difficulty");
+                  }}
+                >
+                  <div className="flex flex-wrap gap-2">
                     {filterOptions.difficulties.map((option) => {
                       const active = normalizeToken(filterDifficulty) === normalizeToken(option);
                       return (
                         <button
                           key={option}
                           type="button"
-                          onClick={() => setFilterDifficulty(active ? "" : option)}
+                          onClick={() => {
+                            setFilterDifficulty(active ? "" : option);
+                            setActiveFilterMenu(null);
+                            setActiveFilterMenuRect(null);
+                          }}
                           className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${getDifficultyOptionClasses(option, active)}`}
                         >
                           {option}
@@ -1907,30 +1971,37 @@ export function FeaturePage({
                       );
                     })}
                   </div>
-                </details>
+                </FilterPopoverCard>
               )}
 
               {isGranadasCategory && (
-                <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
-                    <span>Tipo de lancamento</span>
-                    <svg
-                      viewBox="0 0 20 20"
-                      className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
-                      fill="none"
-                      aria-hidden="true"
-                    >
-                      <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                <FilterPopoverCard
+                  title="Tipo de lancamento"
+                  isOpen={activeFilterMenu === "throwType"}
+                  anchorRect={activeFilterMenu === "throwType" ? activeFilterMenuRect : null}
+                  onToggle={(anchorRect) => {
+                    if (activeFilterMenu === "throwType") {
+                      setActiveFilterMenu(null);
+                      setActiveFilterMenuRect(null);
+                      return;
+                    }
+
+                    setActiveFilterMenuRect(anchorRect);
+                    setActiveFilterMenu("throwType");
+                  }}
+                >
+                  <div className="flex flex-wrap gap-2">
                     {filterOptions.throwTypes.map((option) => {
                       const active = normalizeToken(filterThrowType) === normalizeToken(option);
                       return (
                         <button
                           key={option}
                           type="button"
-                          onClick={() => setFilterThrowType(active ? "" : option)}
+                          onClick={() => {
+                            setFilterThrowType(active ? "" : option);
+                            setActiveFilterMenu(null);
+                            setActiveFilterMenuRect(null);
+                          }}
                           className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
                             active
                               ? "border-violet-300 bg-violet-300/15 text-violet-100"
@@ -1942,22 +2013,25 @@ export function FeaturePage({
                       );
                     })}
                   </div>
-                </details>
+                </FilterPopoverCard>
               )}
 
-              <details className="group rounded-xl border border-slate-700 bg-slate-950/55 p-3">
-                <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-200">
-                  <span>Local do impacto</span>
-                  <svg
-                    viewBox="0 0 20 20"
-                    className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180"
-                    fill="none"
-                    aria-hidden="true"
-                  >
-                    <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </summary>
-                <div className="mt-3 space-y-2 text-xs text-slate-400">
+              <FilterPopoverCard
+                title="Local do impacto"
+                isOpen={activeFilterMenu === "location"}
+                anchorRect={activeFilterMenu === "location" ? activeFilterMenuRect : null}
+                onToggle={(anchorRect) => {
+                  if (activeFilterMenu === "location") {
+                    setActiveFilterMenu(null);
+                    setActiveFilterMenuRect(null);
+                    return;
+                  }
+
+                  setActiveFilterMenuRect(anchorRect);
+                  setActiveFilterMenu("location");
+                }}
+              >
+                <div className="space-y-2 text-xs text-slate-400">
                   <p>
                     {filterMap
                       ? "Lista carregada com base no mapa selecionado."
@@ -1966,7 +2040,11 @@ export function FeaturePage({
                   <select
                     className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
                     value={filterLocation}
-                    onChange={(event) => setFilterLocation(event.target.value)}
+                    onChange={(event) => {
+                      setFilterLocation(event.target.value);
+                      setActiveFilterMenu(null);
+                      setActiveFilterMenuRect(null);
+                    }}
                     disabled={!filterMap}
                   >
                     <option value="">Todos</option>
@@ -1977,7 +2055,8 @@ export function FeaturePage({
                     ))}
                   </select>
                 </div>
-              </details>
+              </FilterPopoverCard>
+
             </div>
           </aside>
 
@@ -1996,7 +2075,7 @@ export function FeaturePage({
                     <p className="mt-2 max-w-3xl text-sm text-slate-400 md:text-base">
                       {filterMap
                         ? `${selectedMapFeatures.length} granadas com pontos registrados neste mapa. Clique nos pontos para alternar entre lancamentos e impactos relacionados.`
-                        : "Use o filtro de mapa na lateral ou no cadastro para abrir o overview e destacar os pontos cadastrados."}
+                        : "Use o filtro acima ou o cadastro para abrir o overview e destacar os pontos cadastrados."}
                     </p>
                   </div>
 
@@ -2043,7 +2122,7 @@ export function FeaturePage({
                       className="min-w-0"
                     />
 
-                    <div className="rounded-2xl border border-slate-700 bg-slate-900/65 p-4">
+                    <div className="rounded-2xl h-min border border-slate-700 bg-slate-900/65 p-4">
                       {!selectedMapFocus ? (
                         <div className="flex min-h-48 items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/40 px-4 text-sm text-slate-400">
                           Selecione um ponto no mapa para ver as granadas relacionadas.
@@ -2145,11 +2224,13 @@ export function FeaturePage({
                   </div>
                 ) : (
                   <div className="mt-5 rounded-2xl border border-dashed border-slate-700 bg-slate-900/55 p-5 text-sm text-slate-400">
-                    Selecione um mapa no filtro lateral para carregar o overview e exibir os pontos cadastrados.
+                    Selecione um mapa acima para carregar o overview e exibir os pontos cadastrados.
                   </div>
                 )}
               </section>
             )}
+
+        </div>
 
         {filteredFeatures.length === 0 ? (
           <div className="rounded-2xl border border-slate-700 bg-slate-900/75 p-6 text-slate-300">
@@ -2806,7 +2887,6 @@ export function FeaturePage({
           </div>
         )}
           </div>
-        </div>
       </section>
 
       {featureModalOpen && canAddFeature && (
