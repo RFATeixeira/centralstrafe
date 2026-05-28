@@ -191,6 +191,90 @@ function pickFirstNonEmptyText(...values: Array<string | null | undefined>) {
   return values.find((value) => Boolean(value?.trim()))?.trim() ?? "";
 }
 
+function getYouTubeOrigin() {
+  return typeof window !== "undefined" ? window.location.origin : "";
+}
+
+type YouTubePlayerInstance = {
+  playVideo: () => void;
+  pauseVideo: () => void;
+  mute?: () => void;
+  setPlaybackRate?: (rate: number) => void;
+  getCurrentTime?: () => number;
+  getDuration?: () => number;
+  seekTo?: (seconds: number, allowSeekAhead?: boolean) => void;
+};
+
+type YouTubeApiWindow = Window & {
+  YT?: {
+    Player: new (
+      element: HTMLDivElement,
+      options: {
+        videoId: string;
+        host?: string;
+        playerVars?: Record<string, string | number | boolean>;
+        events?: {
+          onReady?: (event: { target: YouTubePlayerInstance }) => void;
+          onStateChange?: (event: { data: number; target: YouTubePlayerInstance }) => void;
+        };
+      }
+    ) => YouTubePlayerInstance;
+    PlayerState?: { PLAYING: number; PAUSED: number };
+  };
+  onYouTubeIframeAPIReady?: () => void;
+};
+
+let youtubeIframeApiPromise: Promise<void> | null = null;
+
+function loadYouTubeIframeApi() {
+  if (typeof window === "undefined") {
+    return Promise.resolve();
+  }
+
+  const youtubeWindow = window as YouTubeApiWindow;
+  if (youtubeWindow.YT?.Player) {
+    return Promise.resolve();
+  }
+
+  if (youtubeIframeApiPromise) {
+    return youtubeIframeApiPromise;
+  }
+
+  youtubeIframeApiPromise = new Promise<void>((resolve, reject) => {
+    const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://www.youtube.com/iframe_api"]');
+
+    const cleanup = () => {
+      if (youtubeWindow.onYouTubeIframeAPIReady === onReady) {
+        delete youtubeWindow.onYouTubeIframeAPIReady;
+      }
+    };
+
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+
+    if (existingScript) {
+      youtubeWindow.onYouTubeIframeAPIReady = onReady;
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://www.youtube.com/iframe_api";
+    script.async = true;
+    script.onerror = () => {
+      cleanup();
+      youtubeIframeApiPromise = null;
+      reject(new Error("Nao foi possivel carregar a API do YouTube."));
+    };
+
+    youtubeWindow.onYouTubeIframeAPIReady = onReady;
+    document.head.appendChild(script);
+  });
+
+  return youtubeIframeApiPromise;
+}
+
 function getYouTubeEmbedUrl(url: string) {
   try {
     const parsedUrl = new URL(url);
@@ -203,11 +287,18 @@ function getYouTubeEmbedUrl(url: string) {
     if (videoId) {
       const params = new URLSearchParams({
         autoplay: "1",
+        controls: "0",
+        disablekb: "1",
+        fs: "0",
+        iv_load_policy: "3",
+        modestbranding: "1",
+        rel: "0",
         playsinline: "1",
         enablejsapi: "1",
+        origin: getYouTubeOrigin(),
       });
 
-      return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+      return `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`;
     }
   } catch {
     return "";
@@ -224,7 +315,7 @@ function getYouTubeVideoId(url: string) {
       return parsedUrl.pathname.replace("/", "").trim();
     }
 
-    if (parsedUrl.hostname.includes("youtube.com")) {
+    if (parsedUrl.hostname.includes("youtube.com") || parsedUrl.hostname.includes("youtube-nocookie.com")) {
       const fromQuery = parsedUrl.searchParams.get("v")?.trim() ?? "";
       if (fromQuery) {
         return fromQuery;
@@ -260,9 +351,159 @@ function getYouTubeHoverPreviewUrl(url: string) {
     playlist: videoId,
     playsinline: "1",
     enablejsapi: "1",
+    origin: getYouTubeOrigin(),
   });
 
-  return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+  return `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`;
+}
+
+type YouTubeExpandedPlayerProps = {
+  videoId: string;
+  className?: string;
+};
+
+function YouTubeExpandedPlayer({ videoId, className }: YouTubeExpandedPlayerProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const playerRef = useRef<YouTubePlayerInstance | null>(null);
+  const progressBarRef = useRef<HTMLButtonElement | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId: number | null = null;
+    const containerElement = containerRef.current;
+
+    void loadYouTubeIframeApi()
+      .then(() => {
+        const youtubeWindow = window as YouTubeApiWindow;
+        const youtubeApi = youtubeWindow.YT;
+
+        if (cancelled || !containerElement || !youtubeApi?.Player) {
+          return;
+        }
+
+        containerElement.innerHTML = "";
+
+        const player = new youtubeApi.Player(containerElement, {
+          host: "https://www.youtube-nocookie.com",
+          videoId,
+          playerVars: {
+            autoplay: 1,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            cc_load_policy: 0,
+            iv_load_policy: 3,
+            modestbranding: 1,
+            rel: 0,
+            playsinline: 1,
+            enablejsapi: 1,
+            origin: getYouTubeOrigin(),
+          },
+          events: {
+            onReady: (event) => {
+              event.target.mute?.();
+              event.target.setPlaybackRate?.(1.5);
+              event.target.playVideo();
+              const nextDuration = event.target.getDuration?.() ?? 0;
+              setDuration(Number.isFinite(nextDuration) ? nextDuration : 0);
+              setCurrentTime(event.target.getCurrentTime?.() ?? 0);
+              playerRef.current = event.target;
+            },
+            onStateChange: (event) => {
+              const state = youtubeWindow.YT?.PlayerState;
+              if (!state) {
+                return;
+              }
+
+              if (event.data === state.PLAYING) {
+                const nextDuration = event.target.getDuration?.() ?? 0;
+                setDuration(Number.isFinite(nextDuration) ? nextDuration : 0);
+              }
+            },
+          },
+        });
+
+        playerRef.current = player;
+
+        intervalId = window.setInterval(() => {
+          const nextPlayer = playerRef.current;
+          if (!nextPlayer) {
+            return;
+          }
+
+          const nextCurrentTime = nextPlayer.getCurrentTime?.() ?? 0;
+          const nextDuration = nextPlayer.getDuration?.() ?? 0;
+
+          setCurrentTime(Number.isFinite(nextCurrentTime) ? nextCurrentTime : 0);
+          setDuration(Number.isFinite(nextDuration) ? nextDuration : 0);
+        }, 250);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentTime(0);
+          setDuration(0);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      playerRef.current = null;
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
+      if (containerElement) {
+        containerElement.innerHTML = "";
+      }
+    };
+  }, [videoId]);
+
+  const progressPercentage = duration > 0 ? Math.max(0, Math.min((currentTime / duration) * 100, 100)) : 0;
+
+  const seekFromPointer = (clientX: number) => {
+    const player = playerRef.current;
+    const track = progressBarRef.current;
+
+    if (!player || !track || duration <= 0) {
+      return;
+    }
+
+    const rect = track.getBoundingClientRect();
+    const clampedX = Math.max(rect.left, Math.min(clientX, rect.right));
+    const nextTime = ((clampedX - rect.left) / rect.width) * duration;
+
+    player.seekTo?.(nextTime, true);
+    setCurrentTime(nextTime);
+  };
+
+  return (
+    <div className={`relative aspect-video w-full bg-black ${className ?? ""}`.trim()}>
+      <div ref={containerRef} className="h-full w-full" />
+
+      <div className=" hidden left-3 right-3 absolute w-min-full inset-x-3 bottom-3 z-20 rounded-full border border-slate-700 bg-slate-950/85 px-3 py-2 shadow-[0_18px_45px_rgba(0,0,0,.4)] backdrop-blur-sm">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            ref={progressBarRef}
+            onClick={(event) => seekFromPointer(event.clientX)}
+            onPointerDown={(event) => seekFromPointer(event.clientX)}
+            className="group relative h-3 min-w-0 flex-1 cursor-pointer overflow-hidden rounded-full bg-slate-700/80"
+            aria-label="Barra de progresso do vídeo"
+            title="Clique para buscar no vídeo"
+          >
+            <div className="absolute inset-y-0 left-0 rounded-full bg-orange-300 transition-[width] duration-150" style={{ width: `${progressPercentage}%` }} />
+            <div className="absolute inset-y-0 left-0 w-0.5 bg-white/90 opacity-0 transition-opacity group-hover:opacity-100" style={{ left: `calc(${progressPercentage}% - 1px)` }} />
+          </button>
+        </div>
+
+        <div className="mt-1 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+          <span>{formatTimeLabel(currentTime)}</span>
+          <span>{formatTimeLabel(duration)}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const ZOOM_MIN = 1;
@@ -340,6 +581,17 @@ function sendYouTubePlaybackCommands(targetWindow: Window | null, speed = 1.5) {
   for (const command of commands) {
     targetWindow.postMessage(JSON.stringify(command), "*");
   }
+}
+
+function formatTimeLabel(totalSeconds: number) {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {
+    return "0:00";
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60).toString().padStart(2, "0");
+
+  return `${minutes}:${seconds}`;
 }
 
 function getCommentTimeLabel(value: unknown) {
@@ -1162,8 +1414,7 @@ export function FeaturePage({
   ]);
 
   const openExpandedFeature = (featureId: string) => {
-    const nextExpandedFeatureId = expandedFeatureId === featureId ? null : featureId;
-    setExpandedFeatureId(nextExpandedFeatureId);
+    setExpandedFeatureId(featureId);
     setActiveExpandedImageIndex(0);
   };
 
@@ -1925,6 +2176,21 @@ export function FeaturePage({
             const videoHoverPreviewUrl = getYouTubeHoverPreviewUrl(feature.youtubeUrl);
             const showVideoHoverPreview = !isExpanded && hoveredFeatureId === feature.id && Boolean(videoHoverPreviewUrl);
 
+              const compactCardImageSources = Array.from(
+                new Set(
+                  [
+                    { src: coverImageText, zoomEnabled: false },
+                    ...imageList.map((src, index) => ({
+                      src: src.trim(),
+                      zoomEnabled: feature.imageZoomEnabled?.[index] !== false,
+                    })),
+                  ]
+                    .filter(({ src }) => src.startsWith("data:") || src.startsWith("http"))
+                    .sort((left, right) => Number(left.zoomEnabled) - Number(right.zoomEnabled))
+                    .map(({ src }) => src.trim())
+                )
+              );
+
               const mediaImageSources = Array.from(
                 new Set(
                   [coverImageText, ...imageList]
@@ -1963,16 +2229,17 @@ export function FeaturePage({
                 ? Math.min(activeExpandedImageIndex, mediaItems.length - 1)
                 : 0;
               const activeMediaItem = mediaItems[safeMediaIndex] ?? null;
+              const activeExpandedVideoId = activeMediaItem?.type === "video" ? getYouTubeVideoId(activeMediaItem.src) : "";
               const hasMultipleMedia = mediaItems.length > 1;
               const showImageHoverSlideshow =
                 !isExpanded &&
                 hoveredFeatureId === feature.id &&
                 !videoHoverPreviewUrl &&
                 mediaImageSources.length > 1;
-              const compactCardCoverSources = mediaImageSources.slice(0, 2);
+              const compactCardCoverSources = compactCardImageSources.slice(0, 2);
               const compactCardImage = showImageHoverSlideshow
-                ? mediaImageSources[hoveredImageIndex % mediaImageSources.length]
-                : renderableImage;
+                ? compactCardImageSources[hoveredImageIndex % compactCardImageSources.length]
+                : compactCardImageSources[0] ?? renderableImage;
 
             const goToPreviousImage = () => {
                 if (!mediaItems.length) {
@@ -2034,7 +2301,7 @@ export function FeaturePage({
                         </div>
                         {isExpanded && (
                           <span className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-400">
-                            Clique para recolher
+                            Card expandido
                           </span>
                         )}
                       </div>
@@ -2286,24 +2553,9 @@ export function FeaturePage({
                                   />
                                 )}
                               </>
-                            ) : (
-                              <iframe
-                                className="aspect-video w-full"
-                                src={activeMediaItem.src}
-                                title={`${feature.title} video`}
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                                allowFullScreen
-                                onLoad={(event) => {
-                                  const targetWindow = event.currentTarget.contentWindow;
-                                  sendYouTubePlaybackCommands(targetWindow, 1.5);
-                                  for (let attempt = 1; attempt <= 6; attempt += 1) {
-                                    window.setTimeout(() => {
-                                      sendYouTubePlaybackCommands(targetWindow, 1.5);
-                                    }, attempt * 300);
-                                  }
-                                }}
-                              />
-                            )}
+                            ) : activeExpandedVideoId ? (
+                              <YouTubeExpandedPlayer videoId={activeExpandedVideoId} />
+                            ) : null}
 
                             {hasMultipleMedia && (
                               <>
